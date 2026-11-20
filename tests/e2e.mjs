@@ -17,7 +17,10 @@ async function mockGemini(page) {
     const req = route.request();
     const url = req.url();
     if (url.includes('/models?')) {
-      return route.fulfill({ json: { models: [{ name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] }] } });
+      return route.fulfill({ json: { models: ['gemini-3.8-flash', 'gemini-3.8-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-pro'].map(n => ({ name: `models/${n}`, supportedGenerationMethods: ['generateContent'] })) } });
+    }
+    if (url.includes('/models/gemini-2.5-flash:')) {
+      return route.fulfill({ status: 404, json: { error: { code: 404, message: 'This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features and improvements.' } } });
     }
     const body = JSON.parse(req.postData());
     const text = body.contents[0].parts.find(p => p.text)?.text || '';
@@ -372,6 +375,27 @@ await step('清容量：超過 7 天的紀錄登入時自動刪除，新的保�
   assert.ok(!(await page.isVisible('text=很久以前的美術館')));
   assert.ok(await page.isVisible('text=高雄市立圖書館總館'));
   assert.ok(await page.isVisible('text=自動刪除）'));
+});
+
+await step('模型下架：檢查鑰匙時自動換成最新的 flash', async () => {
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.fill('input[list=modelList]', 'gemini-2.5-flash');
+  await page.click('text=🔑 檢查鑰匙');
+  await page.waitForSelector('text=已自動換成「gemini-3.8-flash」');
+  assert.equal(await page.inputValue('input[list=modelList]'), 'gemini-3.8-flash');
+});
+
+await step('模型下架：產生文案時自動改用 Google 建議的新模型並存起來', async () => {
+  await page.fill('input[list=modelList]', 'gemini-2.5-flash');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+  await page.click('.tabs >> text=⛪ 週會');
+  await page.fill('textarea[placeholder*="逐字稿"]', '今天我們要談尊重。'.repeat(20));
+  await page.click('text=✨ 整理成家長信');
+  await page.waitForSelector('text=已自動改用 gemini-3.8-flash');
+  assert.ok(geminiCalls.length > 0);
+  await page.click('.tabs >> text=⚙️ 設定');
+  assert.equal(await page.inputValue('input[list=modelList]'), 'gemini-3.8-flash');
 });
 
 await step('不同老師的資料分開', async () => {

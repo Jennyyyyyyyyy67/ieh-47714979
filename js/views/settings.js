@@ -1,6 +1,6 @@
 // ⚙️ 設定：Gemini 鑰匙、模型、預設分享老師
 import { el } from '../utils.js';
-import { listModels, DEFAULT_MODEL } from '../gemini.js';
+import { listModels, DEFAULT_MODEL, pickBestFlash } from '../gemini.js';
 import { spinnerButton } from './common.js';
 
 export async function renderSettings(root, ctx) {
@@ -22,9 +22,15 @@ export async function renderSettings(root, ctx) {
     try {
       const models = await listModels(key.value.trim());
       modelList.replaceChildren(...models.map(m => el('option', { value: m })));
-      const ok = models.includes(model.value.trim());
+      let ok = models.includes(model.value.trim());
+      let note = `✅ 鑰匙可以用，模型「${model.value}」也找得到。`;
+      if (!ok) {
+        const best = pickBestFlash(models);
+        if (best) { note = `✅ 鑰匙可以用。原本的模型「${model.value}」已經沒有了，已自動換成「${best}」，請按「儲存設定」。`; model.value = best; ok = true; }
+        else note = `鑰匙可以用，但找不到模型「${model.value}」。請從模型欄位的下拉選單挑一個名字有 flash 的。`;
+      }
       msg.replaceChildren(el('div', { class: ok ? 'notice ok' : 'notice warn' },
-        ok ? `✅ 鑰匙可以用，模型「${model.value}」也找得到。` : `鑰匙可以用，但找不到模型「${model.value}」。請從模型欄位的下拉選單挑一個名字有 flash 的。`,
+        note,
         el('details', {}, el('summary', {}, `可以用的模型（${models.length}）`), el('div', { class: 'muted' }, models.join('、')))));
     } catch (e) { msg.replaceChildren(el('div', { class: 'notice danger' }, e.message)); }
     done();

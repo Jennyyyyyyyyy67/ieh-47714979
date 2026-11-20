@@ -1,6 +1,7 @@
 // 主程式：登入、分頁切換
 import { createStore } from './store.js';
 import { el } from './utils.js';
+import { setModelUpgradeHandler } from './gemini.js';
 import { renderTopics } from './views/topics.js';
 import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
@@ -126,6 +127,11 @@ async function main() {
     );
     tabsEl.hidden = false;
     await ctx.reloadSettings();
+    setModelUpgradeHandler(async (model) => {
+      ctx.settings = { ...ctx.settings, model };
+      await ctx.store.saveSettings(ctx.settings);
+      toast(`🔄 Google 換了新模型，已自動改用 ${model}`);
+    });
     await autoCleanup();
     ctx.go(ctx.settings.geminiKey ? 'trip' : 'settings');
   });

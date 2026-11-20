@@ -1,6 +1,24 @@
 // 呼叫 Google Gemini（免費額度）。鑰匙由老師在「設定」頁貼上，不寫在程式碼裡。
 const BASE = 'https://generativelanguage.googleapis.com/v1beta';
-export const DEFAULT_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_MODEL = 'gemini-3.8-flash';
+
+// Google 下架舊模型時，會在錯誤訊息裡建議新模型。系統會自動換過去，並通知設定頁存起來。
+let onModelUpgrade = null;
+export function setModelUpgradeHandler(fn) { onModelUpgrade = fn; }
+
+/** 從錯誤訊息找出 Google 建議的新模型，例如「use models/gemini-3.8-flash」 */
+export function suggestedModel(message) {
+  const m = String(message || '').match(/use\s+models\/([\w.-]+)/i);
+  return m ? m[1] : null;
+}
+
+/** 從可用的模型裡，挑最新的一般版 flash（例如 gemini-3.8-flash） */
+export function pickBestFlash(models) {
+  const plain = models.filter(n => /^gemini-[\d.]+-flash$/.test(n));
+  const ver = n => n.match(/^gemini-([\d.]+)-/)[1].split('.').map(Number);
+  plain.sort((a, b) => { const x = ver(a), y = ver(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (y[i] || 0) - (x[i] || 0); } return 0; });
+  return plain[0] || models.find(n => /flash/.test(n)) || null;
+}
 
 function friendlyError(status, bodyText) {
   let msg = '';
@@ -17,7 +35,19 @@ function friendlyError(status, bodyText) {
  * parts：[{text}] 或 [{inline_data:{mime_type,data}}]
  * schema：要 Gemini 照這個格式回答（JSON）
  */
-export async function callGemini({ apiKey, model, parts, schema, temperature = 0.4 }) {
+export async function callGemini(opts) {
+  try {
+    return await callOnce(opts);
+  } catch (e) {
+    const next = e.status === 404 ? suggestedModel(e.raw) : null;
+    if (!next || next === opts.model) throw e;
+    const out = await callOnce({ ...opts, model: next });
+    if (onModelUpgrade) onModelUpgrade(next);
+    return out;
+  }
+}
+
+async function callOnce({ apiKey, model, parts, schema, temperature = 0.4 }) {
   if (!apiKey) throw new Error('還沒有設定 Gemini 鑰匙，請先到「⚙️ 設定」頁貼上。');
   const url = `${BASE}/models/${encodeURIComponent(model || DEFAULT_MODEL)}:generateContent`;
   const body = {
@@ -35,7 +65,12 @@ export async function callGemini({ apiKey, model, parts, schema, temperature = 0
     throw new Error('連不上 Gemini，請檢查網路。');
   }
   const text = await res.text();
-  if (!res.ok) throw new Error(friendlyError(res.status, text));
+  if (!res.ok) {
+    const err = new Error(friendlyError(res.status, text));
+    err.status = res.status;
+    err.raw = text;
+    throw err;
+  }
   const data = JSON.parse(text);
   const cand = data.candidates?.[0];
   const out = cand?.content?.parts?.map(p => p.text || '').join('') || '';
