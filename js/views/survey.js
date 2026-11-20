@@ -36,7 +36,7 @@ export async function readXlsxRows(file) {
 /**
  * 學生名單：一行一位。支援
  * - 有標題列：「姓名 年級 班別」（欄位順序不限，用 Tab、逗號或空白分開）
- * - 沒有標題列：「洪美恩 1 快樂兔」（名字在第一欄）或「3年級,王小明」（名字在最後）
+ * - 沒有標題列：「王小明 1 快樂兔」（名字在第一欄）或「3年級,王小明」（名字在最後）
  */
 export function parseRoster(text) {
   const rows = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
