@@ -2,7 +2,6 @@
 import { createStore } from './store.js';
 import { el } from './utils.js';
 import { setModelUpgradeHandler } from './gemini.js';
-import { renderTopics } from './views/topics.js';
 import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
 import { renderPublish, renderHistory } from './views/publish.js';
@@ -20,7 +19,6 @@ const TABS = [
   { key: 'meeting', label: '⛪ 週會', render: renderMeeting },
   { key: 'publish', label: '📤 本週發送', render: renderPublish },
   { key: 'survey', label: '📊 問卷檢查', render: renderSurvey },
-  { key: 'topics', label: '📚 學習主題庫', render: renderTopics },
   { key: 'history', label: '🗂️ 紀錄', render: renderHistory },
   { key: 'settings', label: '⚙️ 設定', render: renderSettings },
 ];
@@ -93,7 +91,7 @@ function renderAuth() {
   pw.addEventListener('keydown', e => { if (e.key === 'Enter') busy(() => ctx.store.signIn(email.value, pw.value)); });
 }
 
-// 超過保留天數的踏查、週會紀錄自動刪除（清容量）。學習主題庫不會刪。
+// 超過保留天數的踏查、週會紀錄自動刪除（清容量）。
 export const DEFAULT_RETENTION_DAYS = 7;
 async function autoCleanup() {
   const days = ctx.settings.retentionDays ?? DEFAULT_RETENTION_DAYS;

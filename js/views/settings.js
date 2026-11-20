@@ -72,7 +72,7 @@ export async function renderSettings(root, ctx) {
         el('div', {}, el('label', {}, '發送時間'), sendTime),
       ),
       el('label', {}, '舊紀錄（踏查、週會）'), retention,
-      el('p', { class: 'muted' }, '每次登入時會自動清掉太舊的紀錄。學習主題庫不會被刪。教學紀錄請記得先複製到學校的檔案裡。'),
+      el('p', { class: 'muted' }, '每次登入時會自動清掉太舊的紀錄。教學紀錄請記得先複製到學校的檔案裡。'),
     ),
     el('div', { class: 'card' },
       el('div', { class: 'btns', style: 'margin-top:0' }, saveBtn),

@@ -1,9 +1,8 @@
-// 🚌 每週二踏查：行程表 → 照片 → AI 看照片（老師核對）→ 學習主題 → 問卷連結 → 產生文案 → 檢查清單 → 複製
+// 🚌 每週二踏查：行程表 → 照片 → AI 看照片（老師核對）→ 問卷連結 → 產生文案 → 檢查清單 → 複製
 import { el, todayISO, toROC, surveyTitle, resizeImage, fileToBase64, formatBytes } from '../utils.js';
 import { callGemini, DEFAULT_MODEL } from '../gemini.js';
 import { PHOTO_SCHEMA, photoPrompt, TRIP_SCHEMA, tripPrompt } from '../prompts.js';
 import { publishChecklist, outputBlock, spinnerButton } from './common.js';
-import { topicLabel } from './topics.js';
 
 const MAX_PHOTOS = 12;
 const MAMMOTH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
@@ -23,7 +22,6 @@ function newState() {
     docs: [],              // 只放在記憶體：PDF／圖片檔的行程表、學習單
     photos: [],            // 只放在記憶體：縮小後的照片
     consent: false,
-    selections: [],        // [{topicId, grade, subject, name, goals, concepts:[...]}]
     survey: { g12: '', g38: '' },
     photoNotes: [],        // [{seen, highlights, uncertain, privacy}]
     notesConfirmed: false,
@@ -70,17 +68,7 @@ export function assembleTexts(S, r) {
       `活動名稱：${S.title || '戶外踏查'}`,
       `參加年級：${S.grades || '（未填）'}`,
       '',
-      '對應單元與學習概念：',
-      ...(S.selections.length
-        ? S.selections.map(s => `・${topicLabel(s)}：${s.concepts.length ? s.concepts.join('、') : '（整個單元）'}`)
-        : ['・（未選擇）']),
-      '',
-      '學習目標：',
-      ...(S.selections.flatMap(s => s.goals || []).length
-        ? [...new Set(S.selections.flatMap(s => s.goals || []))].map(g => `・${g}`)
-        : ['・（學習主題庫裡沒有填學習目標，請老師補上）']),
-      '',
-      `與課堂學習的連結：${(r.class_connection || '').trim()}`,
+      `學習重點：${(r.class_connection || '').trim()}`,
       '',
       '活動過程：',
       (r.teaching_process || '').trim(),
@@ -101,7 +89,6 @@ export async function renderTrip(root, ctx) {
     S = { ...newState(), ...t, docs: [], photos: [], consent: false };
     ctx.params = null;
   }
-  const topics = await store.list('topics');
   const settings = ctx.settings || {};
   let namesForCheck = '';      // 老師臨時輸入的學生名字：只放在記憶體，不儲存
   const getNames = () => namesForCheck.split(/[\s,，、]+/).filter(Boolean);
@@ -253,53 +240,7 @@ export async function renderTrip(root, ctx) {
     );
   }
 
-  // ===== 第 4 步：學習主題 =====
-  const topicBox = el('div');
-  const selectedSummary = el('div');
-  const isSel = (t, c) => !!S.selections.find(s => s.topicId === t.id && (c === null ? true : s.concepts.includes(c)));
-  const toggle = (t, c, on) => {
-    let s = S.selections.find(x => x.topicId === t.id);
-    if (on) {
-      if (!s) { s = { topicId: t.id, grade: t.grade, subject: t.subject, name: t.name, goals: t.goals || [], concepts: [] }; S.selections.push(s); }
-      if (c !== null && !s.concepts.includes(c)) s.concepts.push(c);
-    } else if (s) {
-      if (c === null) S.selections = S.selections.filter(x => x !== s);
-      else { s.concepts = s.concepts.filter(x => x !== c); if (!s.concepts.length) S.selections = S.selections.filter(x => x !== s); }
-    }
-    drawSelected();
-  };
-  function drawSelected() {
-    selectedSummary.replaceChildren(...(S.selections.length
-      ? [el('div', {}, el('strong', {}, '已選：'), ...S.selections.flatMap(s => (s.concepts.length ? s.concepts : ['整個單元']).map(c => el('span', { class: 'tag' }, `${s.subject || s.name}／${c}`))))]
-      : [el('span', { class: 'muted' }, '還沒有選（可以不選，但文案就不會連結到課堂學習）')]));
-  }
-  function drawTopics() {
-    if (!topics.length) {
-      topicBox.replaceChildren(el('div', { class: 'notice warn' }, '學習主題庫還是空的。', el('button', { class: 'btn small', onclick: () => ctx.go('topics') }, '去新增單元')));
-      return;
-    }
-    const search = el('input', { type: 'text', placeholder: '🔍 搜尋單元或概念' });
-    const list = el('div');
-    const draw = () => {
-      const q = search.value.trim();
-      list.replaceChildren(...topics.filter(t => !q || JSON.stringify([t.grade, t.subject, t.name, t.concepts]).includes(q)).map(t => {
-        const concepts = t.concepts?.length ? t.concepts : [null];
-        return el('div', { class: 'topic' },
-          el('div', { class: 'title' }, topicLabel(t)),
-          ...concepts.map(c => {
-            const cb = el('input', { type: 'checkbox', checked: isSel(t, c) });
-            cb.addEventListener('change', () => toggle(t, c, cb.checked));
-            return el('label', { class: 'inline' }, cb, el('span', {}, c === null ? '（這個單元沒有填概念，勾選整個單元）' : c));
-          }),
-        );
-      }));
-    };
-    search.addEventListener('input', draw);
-    topicBox.replaceChildren(search, list);
-    draw();
-  }
-
-  // ===== 第 5 步：問卷連結 =====
+  // ===== 第 4 步：問卷連結 =====
   const g12 = el('input', { type: 'url', value: S.survey.g12, placeholder: 'https://forms.gle/…' });
   const g38 = el('input', { type: 'url', value: S.survey.g38, placeholder: 'https://forms.gle/…' });
   g12.addEventListener('input', () => { S.survey.g12 = g12.value.trim(); });
@@ -312,7 +253,7 @@ export async function renderTrip(root, ctx) {
     );
   }
 
-  // ===== 第 6 步：選版本、產生 =====
+  // ===== 第 5 步：選版本、產生 =====
   const OUT_LABELS = [
     ['line', '📱 家長群組溫馨回顧（LINE）'],
     ['survey', '📋 問卷標題＋回家可以問孩子的問題（放進 Google 表單）'],
@@ -341,10 +282,8 @@ export async function renderTrip(root, ctx) {
     genMsg.replaceChildren();
     const done = spinnerButton(genBtn, 'AI 正在寫文案…');
     try {
-      const topicsText = S.selections.map(s =>
-        `・${s.subject || '（未分類）'}／${s.concepts.length ? s.concepts.join('、') : s.name}（單元：${[s.grade, s.name].filter(Boolean).join(' ')}${s.goals?.length ? `；學習目標：${s.goals.join('、')}` : ''}）`).join('\n');
       const photoNotes = S.photoNotes.map((n, i) => `照片${i + 1}：${n.seen}${n.highlights ? `（亮點：${n.highlights}）` : ''}${n.uncertain && n.uncertain !== '無' ? `［不確定：${n.uncertain}］` : ''}`).join('\n');
-      const parts = tripPrompt({ trip: S, topicsText, photoNotes, outputs: S.outputs, docParts: docParts() });
+      const parts = tripPrompt({ trip: S, photoNotes, outputs: S.outputs, docParts: docParts() });
       const r = await callGemini({ apiKey: settings.geminiKey, model: settings.model || DEFAULT_MODEL, parts, schema: TRIP_SCHEMA, temperature: 0.6 });
       S.result = r;
       S.texts = assembleTexts(S, r);
@@ -379,7 +318,7 @@ export async function renderTrip(root, ctx) {
     const fc = (S.result?.fact_check || []);
     resultBox.replaceChildren(
       el('div', { class: 'card' },
-        el('h2', {}, el('span', { class: 'step-num' }, '7'), '核對與複製'),
+        el('h2', {}, el('span', { class: 'step-num' }, '6'), '核對與複製'),
         fc.length ? el('details', { open: true }, el('summary', {}, `🔎 AI 寫進文案的事實和來源（${fc.length} 項）— 請核對`),
           ...fc.map(x => el('div', { class: 'list-item' }, el('span', {}, x.claim), el('span', { class: x.source?.includes('照片') ? 'tag warn' : 'tag' }, x.source)))) : null,
         el('label', {}, '🔒 個資檢查（選填）：輸入這次學生的名字，系統會幫你找文案裡有沒有出現。名字不會被儲存。'),
@@ -411,7 +350,7 @@ export async function renderTrip(root, ctx) {
     reviewBox,
   );
   step6Card.append(
-    el('h2', {}, el('span', { class: 'step-num' }, '6'), '要產生哪幾種？'),
+    el('h2', {}, el('span', { class: 'step-num' }, '5'), '要產生哪幾種？'),
     ...outChecks,
     el('details', {}, el('summary', {}, '進階選項'),
       el('label', { class: 'inline' }, lqCb, el('span', {}, '「回家可以問孩子的問題」也放進 LINE 家長訊息（預設只放在問卷）'))),
@@ -455,13 +394,7 @@ export async function renderTrip(root, ctx) {
     ),
     step3Card,
     el('div', { class: 'card' },
-      el('h2', {}, el('span', { class: 'step-num' }, '4'), '這次活動和課堂上學的什麼有關？'),
-      el('p', { class: 'muted' }, '從學習主題庫勾選單元和概念（可以多選）。'),
-      selectedSummary,
-      topicBox,
-    ),
-    el('div', { class: 'card' },
-      el('h2', {}, el('span', { class: 'step-num' }, '5'), '問卷連結'),
+      el('h2', {}, el('span', { class: 'step-num' }, '4'), '問卷連結'),
       el('p', { class: 'muted' }, '每週新的 Google 表單連結貼在這裡。沒有問卷就留空，家長訊息就不會出現問卷那一段。'),
       el('label', {}, '1-2年級問卷'), g12,
       el('label', {}, '3-8年級問卷'), g38,
@@ -471,5 +404,5 @@ export async function renderTrip(root, ctx) {
     resultBox,
   );
   if (!settings.geminiKey) root.prepend(el('div', { class: 'notice danger' }, '還沒設定 Gemini 鑰匙，AI 功能不能用。', el('button', { class: 'btn small', onclick: () => ctx.go('settings') }, '去設定')));
-  drawDocs(); drawPhotos(); drawReview(); drawTopics(); drawSelected(); drawSurveyTitles(); drawResult(); updateLocks();
+  drawDocs(); drawPhotos(); drawReview(); drawSurveyTitles(); drawResult(); updateLocks();
 }

@@ -102,12 +102,12 @@ export const TRIP_SCHEMA = {
     ig_caption: { type: 'STRING' },
     ig_hashtags: { type: 'ARRAY', items: { type: 'STRING' } },
     teaching_process: { type: 'STRING', description: '教學紀錄的「活動過程」，條列，依行程表順序' },
-    class_connection: { type: 'STRING', description: '一兩句話說明這次活動和所選學習概念的關係' },
+    class_connection: { type: 'STRING', description: '一兩句話寫出這次的學習重點（依學習單／行程表）' },
     fact_check: {
       type: 'ARRAY',
       items: {
         type: 'OBJECT',
-        properties: { claim: { type: 'STRING' }, source: { type: 'STRING', description: '「行程表」「學習單」「照片N」或「學習主題庫」' } },
+        properties: { claim: { type: 'STRING' }, source: { type: 'STRING', description: '「行程表」「學習單」或「照片N」' } },
         required: ['claim', 'source'],
       },
       description: '文案中提到的每一件事實和它的來源，讓老師核對',
@@ -116,7 +116,7 @@ export const TRIP_SCHEMA = {
   required: ['line_title', 'line_body', 'home_questions', 'fb_post', 'ig_caption', 'ig_hashtags', 'teaching_process', 'class_connection', 'fact_check'],
 };
 
-export function tripPrompt({ trip, topicsText, photoNotes, outputs, docParts }) {
+export function tripPrompt({ trip, photoNotes, outputs, docParts }) {
   const want = [];
   if (outputs.line) want.push('line_title、line_body（家長群組溫馨回顧）');
   if (outputs.survey || outputs.lineQuestions) want.push('home_questions（回家可以問孩子的問題，1～2 題）');
@@ -136,13 +136,13 @@ ${want.join('\n')}
 ■ 家長群組溫馨回顧（line_title + line_body）：完全模仿下面範例的語氣和結構。
   - 第一段用一個問句和「爸爸媽媽」對話，接著說「今天我們帶孩子……展開一場……探索！」
   - 第二段寫孩子們做了什麼（只能寫行程表／學習單裡有的事），結尾把學到的帶回生活，加「✨」。
-  - 要自然帶出這次活動和課堂上學的什麼有關（用下面的學習概念），但不要像在上課。
+  - 要自然帶出孩子們這次學到什麼（依學習單的內容），但不要像在上課。
   - 不要寫問卷連結和「12點前送出」提醒，系統會自動加上。
   範例：
 ${TRIP_EXAMPLE}
 
-■ home_questions：1～2 題，每題都要和所選的學習概念有關，用孩子聽得懂的話，開放式問題（不是是非題）。
-■ fb_post：給學校粉專的宣傳貼文，3～5 段短段落，可用少量 emoji，最後一句邀請大家一起關注孩子的學習。要帶出和學習概念的關聯。
+■ home_questions：1～2 題，每題都要和這次學習單的學習重點有關，用孩子聽得懂的話，開放式問題（不是是非題）。
+■ fb_post：給學校粉專的宣傳貼文，3～5 段短段落，可用少量 emoji，最後一句邀請大家一起關注孩子的學習。要帶出孩子們學到了什麼。
 ■ ig_caption：比 FB 更短、更有節奏感，2～4 行。ig_hashtags：8～12 個，不要加 # 號以外的符號，要有地點、活動類型、學習主題，例如「戶外踏查」「校外教學」。不要出現學校名稱以外的個人資訊。
 ■ teaching_process：依行程表順序條列（每行以「・」開頭），寫實、不誇大。
 ■ fact_check：把文案中提到的每件事列出來，並寫來源。如果某件事找不到來源，就不要寫進文案。
@@ -152,9 +152,6 @@ ${TRIP_EXAMPLE}
 地點：${trip.place}
 活動名稱：${trip.title || '（未填）'}
 參加年級：${trip.grades || '（未填）'}
-
-【對應的學習單元與概念（老師選的）】
-${topicsText || '（老師沒有選）'}
 
 【行程表／學習單文字】
 ${trip.scheduleText || '（請參考附件檔案）'}

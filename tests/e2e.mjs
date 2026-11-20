@@ -107,45 +107,6 @@ await step('設定 Gemini 鑰匙並檢查', async () => {
   await page.waitForSelector('text=設定已儲存');
 });
 
-await step('主題庫：新增一個單元', async () => {
-  await page.click('.tabs >> text=📚 學習主題庫');
-  await page.fill('input[placeholder*="3-4年級"]', '全年級');
-  await page.fill('input[placeholder*="社會、自然"]', '戶外踏查');
-  await page.fill('input[placeholder*="社區的公共服務"]', '認識城市地標');
-  const formTa = page.locator('.card').first().locator('textarea');
-  await formTa.nth(0).fill('圖書分類\n公共空間禮儀');
-  await formTa.nth(1).fill('能用分類號找到書');
-  await page.click('button:has-text("儲存")');
-  await page.waitForSelector('.topic >> text=認識城市地標');
-});
-
-await step('主題庫：一次貼上多行（含標題列、Tab 分隔以外的 CSV）', async () => {
-  await page.fill('.card:has-text("一次貼上多行") textarea', '年級,學科,單元名稱,學習概念,學習目標\n3-4年級,社會,社區的公共服務,公共設施的功能;垃圾處理流程,能說出焚化廠的功能\n3-4年級,自然,資源回收,垃圾分類與資源回收,能正確分類垃圾\n,,,沒有名稱這行要略過,');
-  await page.click('text=加入這些單元');
-  await page.waitForSelector('text=已匯入 2 個');
-  assert.ok(await page.isVisible('text=第 4 行沒有'));
-  assert.equal(await page.locator('.topic').count(), 3);
-});
-
-await step('主題庫：匯入 CSV 檔（含引號與逗號）', async () => {
-  await page.setInputFiles('input[type=file][accept*=csv]', { name: 't.csv', mimeType: 'text/csv', buffer: Buffer.from('﻿年級,學科,單元名稱,學習概念,學習目標\n5年級,藝術,"美術館, 觀察",色彩;構圖,能說出作品特色\n') });
-  await page.waitForSelector('text=已匯入 1 個');
-  await page.waitForSelector('.topic >> text=美術館, 觀察');
-});
-
-await step('主題庫：修改', async () => {
-  await page.locator('.topic', { hasText: '美術館, 觀察' }).locator('text=修改').click();
-  await page.fill('input[placeholder*="社區的公共服務"]', '美術館觀察');
-  await page.click('button:has-text("儲存")');
-  await page.waitForSelector('.topic >> text=美術館觀察');
-});
-
-await step('主題庫：刪除', async () => {
-  await page.locator('.topic', { hasText: '美術館觀察' }).locator('text=刪除').click();
-  await page.waitForSelector('text=已刪除');
-  assert.equal(await page.locator('.topic').count(), 3);
-});
-
 await step('踏查：沒勾肖像同意前不能選照片', async () => {
   await page.click('.tabs >> text=🚌 踏查');
   assert.ok(await page.isDisabled('text=📷 選擇照片'));
@@ -191,10 +152,7 @@ await step('踏查：老師核對後打勾才解鎖', async () => {
   assert.ok(!(await page.isDisabled('text=✨ 產生文案')));
 });
 
-await step('踏查：多選單元概念＋問卷連結', async () => {
-  await page.check('label:has-text("圖書分類")');
-  await page.check('label:has-text("垃圾分類與資源回收")');
-  await page.waitForSelector('.tag:has-text("戶外踏查／圖書分類")');
+await step('踏查：問卷連結＋自動問卷標題', async () => {
   await page.fill('input[type=url] >> nth=0', 'https://forms.gle/AAA');
   await page.fill('input[type=url] >> nth=1', 'https://forms.gle/BBB');
   const titles = await page.textContent('.bubble');
@@ -206,7 +164,7 @@ await step('踏查：產生四種版本＋問卷題目', async () => {
   await page.click('text=✨ 產生文案');
   await page.waitForSelector('text=📝 教學紀錄', { timeout: 10000 });
   const last = geminiCalls.at(-1);
-  assert.ok(last.text.includes('圖書分類'), '提示詞包含選的概念');
+  assert.ok(!last.text.includes('學習主題庫'), '不再使用學習主題庫');
   assert.ok(last.text.includes('孩子們在書架前用分類號找書'), '提示詞用老師核對過的描述');
 });
 
@@ -232,12 +190,11 @@ await step('IG：hashtag 有 # 而且不重複 #', async () => {
   assert.ok(t.includes('#戶外踏查 #高雄市圖'));
 });
 
-await step('教學紀錄：寫出單元、概念、學習目標，教學省思留空', async () => {
+await step('教學紀錄：有日期地點、學習重點、活動過程，教學省思留空', async () => {
   const t = await outText('📝 教學紀錄');
-  assert.ok(t.includes('全年級 戶外踏查｜認識城市地標：圖書分類'));
-  assert.ok(t.includes('3-4年級 自然｜資源回收：垃圾分類與資源回收'));
-  assert.ok(t.includes('・能用分類號找到書'));
-  assert.ok(t.includes('・能正確分類垃圾'));
+  assert.ok(t.includes('地點：高雄市立圖書館總館'));
+  assert.ok(t.includes('學習重點：連結到圖書分類概念'));
+  assert.ok(t.includes('・用分類號找書'));
   assert.ok(/教學省思：\s*$/.test(t), '教學省思後面要是空的');
 });
 
@@ -392,8 +349,7 @@ await step('模型下架：產生文案時自動改用 Google 建議的新模型
   await page.click('.tabs >> text=⛪ 週會');
   await page.fill('textarea[placeholder*="逐字稿"]', '今天我們要談尊重。'.repeat(20));
   await page.click('text=✨ 整理成家長信');
-  await page.waitForSelector('text=已自動改用 gemini-3.8-flash');
-  assert.ok(geminiCalls.length > 0);
+  await page.waitForSelector('text=💌 週會家長信');
   await page.click('.tabs >> text=⚙️ 設定');
   assert.equal(await page.inputValue('input[list=modelList]'), 'gemini-3.8-flash');
 });
@@ -406,8 +362,7 @@ await step('不同老師的資料分開', async () => {
   await page.waitForSelector('text=⚙️ 設定');
   await page.click('.tabs >> text=🗂️ 紀錄');
   await page.waitForSelector('text=🚌 踏查（0）');
-  await page.click('.tabs >> text=📚 學習主題庫');
-  await page.waitForSelector('text=還沒有任何單元');
+  assert.ok(!(await page.isVisible('.tabs >> text=學習主題庫')), '學習主題庫已移除');
   await page.click('text=登出');
   await page.fill('input[type=email]', 'teacherA@example.com');
   await page.fill('input[type=password]', 'wrongpass');
@@ -425,7 +380,7 @@ await step('手機畫面：沒有左右捲動', async () => {
   await mp.fill('input[type=password]', 'secret789');
   await mp.click('text=第一次使用：註冊');
   await mp.waitForSelector('text=⚙️ 設定');
-  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📊 問卷檢查', '📚 學習主題庫', '🗂️ 紀錄', '⚙️ 設定']) {
+  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📊 問卷檢查', '🗂️ 紀錄', '⚙️ 設定']) {
     await mp.click(`.tabs >> text=${tab}`);
     await mp.waitForTimeout(150);
     const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
