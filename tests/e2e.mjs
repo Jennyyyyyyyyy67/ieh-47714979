@@ -5,6 +5,9 @@ import assert from 'node:assert/strict';
 
 const BASE = process.env.BASE || 'http://localhost:8765/';
 const SHOTS = process.env.SHOTS || '';
+const XLSX_LIB = process.env.XLSX_LIB || '';
+const FAKE_ROSTER = process.env.FAKE_ROSTER || '';
+import { readFileSync } from 'node:fs';
 const results = [];
 const step = async (name, fn) => {
   try { await fn(); results.push(['✅', name]); }
@@ -13,6 +16,7 @@ const step = async (name, fn) => {
 
 const geminiCalls = [];
 async function mockGemini(page) {
+  if (XLSX_LIB) await page.route('https://cdnjs.cloudflare.com/ajax/libs/xlsx/**', r => r.fulfill({ body: readFileSync(XLSX_LIB), contentType: 'application/javascript' }));
   await page.route('https://generativelanguage.googleapis.com/**', async route => {
     const req = route.request();
     const url = req.url();
@@ -292,7 +296,7 @@ await step('問卷檢查：找出未交、遲交、重複、打錯字，並批�
   await page.setInputFiles('input[type=file][accept*=csv]', { name: '3-8年級.csv', mimeType: 'text/csv', buffer: Buffer.from('﻿' + csv) });
   await page.waitForSelector('text=共 4 筆回覆');
   const sum = await page.textContent('.bubble');
-  assert.ok(sum.includes('未交（1）：林大同'), sum);
+  assert.ok(sum.includes('未交（1）') && sum.includes('・4年級：林大同'), sum);
   assert.ok(sum.includes('遲交（1）：陳 小華'), sum);
   assert.ok(await page.isVisible('text=交了 2 次'));
   assert.ok(await page.isVisible('text=林大童'));
@@ -306,6 +310,45 @@ await step('問卷檢查：找出未交、遲交、重複、打錯字，並批�
   await page.waitForSelector('text=2/3（67%）');
   const dump = await page.evaluate(() => JSON.stringify(localStorage));
   assert.ok(!dump.includes('林大同') && !dump.includes('陳小華'), '名單不能被儲存');
+});
+
+await step('名單：上傳 Excel（姓名／年級／班別、有空白列、班別前有空格）', async () => {
+  if (!FAKE_ROSTER) throw new Error('沒有提供測試用名單檔');
+  await page.setInputFiles('input[type=file][accept*=xlsx][accept*=txt]', FAKE_ROSTER);
+  await page.waitForSelector('text=讀到 4 位學生');
+  const info = await page.textContent('text=讀到 4 位學生');
+  assert.ok(info.includes('快樂兔 2 人') && info.includes('智慧鹿 1 人') && info.includes('勇氣虎 1 人'), info);
+  assert.ok(info.includes('還沒記住'));
+  const sum = await page.textContent('.bubble');
+  assert.ok(sum.includes('未交（4）'), sum);
+  assert.ok(sum.includes('・1年級 快樂兔：測試甲、測試乙'), sum);
+  assert.ok(sum.includes('・3年級 智慧鹿：測試丙'), sum);
+});
+
+await step('名單：貼上「姓名 年級 班別」格式也讀得對（名字不會變成班別）', async () => {
+  await page.fill('textarea', '姓名\t年級\t班別\n測試戊\t2\t恩典鷹');
+  const info = await page.textContent('text=讀到 1 位學生');
+  assert.ok(info.includes('恩典鷹 1 人'), info);
+  const sum = await page.textContent('.bubble');
+  assert.ok(sum.includes('・2年級 恩典鷹：測試戊'), sum);
+});
+
+await step('名單：按「記住」後重新整理會自動載入；按「清除」就不見', async () => {
+  await page.setInputFiles('input[type=file][accept*=xlsx][accept*=txt]', FAKE_ROSTER);
+  await page.waitForSelector('text=讀到 4 位學生');
+  await page.click('text=💾 記住這份名單');
+  await page.waitForSelector('text=✅ 已記住');
+  await page.reload();
+  await page.click('.tabs >> text=📊 問卷檢查');
+  await page.waitForSelector('text=讀到 4 位學生');
+  assert.ok(await page.isVisible('text=✅ 已記住'));
+  await page.click('text=🗑️ 清除記住的名單');
+  await page.waitForSelector('text=已清除記住的名單');
+  await page.reload();
+  await page.click('.tabs >> text=📊 問卷檢查');
+  assert.equal(await page.inputValue('textarea'), '');
+  const dump = await page.evaluate(() => JSON.stringify(localStorage));
+  assert.ok(!dump.includes('測試甲'), '清除後不能還留著名單');
 });
 
 await step('設定：可以改保留天數和發送時間', async () => {

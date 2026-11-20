@@ -14,14 +14,57 @@ function guessCol(headers, hints) {
   return i;
 }
 
-function parseRoster(text) {
-  // 每行一位學生：「姓名」或「年級,姓名」或「年級 姓名」
-  return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => {
-    const parts = l.split(/[,，\t]/).map(x => x.trim()).filter(Boolean);
-    const name = parts.length > 1 ? parts[parts.length - 1] : parts[0];
-    const group = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
-    return { name, group, key: normName(name) };
-  });
+const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+
+/** 讀 Excel（.xlsx）第一個工作表，回傳一列一列的陣列 */
+export async function readXlsxRows(file) {
+  if (!window.XLSX) {
+    await new Promise((resolve, reject) => {
+      const sc = document.createElement('script');
+      sc.src = XLSX_URL; sc.onload = resolve;
+      sc.onerror = () => reject(new Error('無法載入 Excel 讀取工具，請檢查網路，或把 Excel 另存成 CSV 再上傳。'));
+      document.head.append(sc);
+    });
+  }
+  const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
+    .map(r => r.map(c => String(c ?? '').trim()))
+    .filter(r => r.some(Boolean));
+}
+
+/**
+ * 學生名單：一行一位。支援
+ * - 有標題列：「姓名 年級 班別」（欄位順序不限，用 Tab、逗號或空白分開）
+ * - 沒有標題列：「王小明 1 快樂兔」（名字在第一欄）或「3年級,王小明」（名字在最後）
+ */
+export function parseRoster(text) {
+  const rows = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    .map(l => l.split(/[,，\t]|\s{1,}/).map(x => x.trim()).filter(Boolean));
+  if (!rows.length) return [];
+  let iName = -1, iGrade = -1, iClass = -1, start = 0;
+  const head = rows[0];
+  if (head.some(h => /姓名|名字/.test(h))) {
+    iName = head.findIndex(h => /姓名|名字/.test(h));
+    iGrade = head.findIndex(h => /年級/.test(h));
+    iClass = head.findIndex(h => /班/.test(h));
+    start = 1;
+  }
+  const out = [];
+  for (const parts of rows.slice(start)) {
+    let name, grade = '', cls = '';
+    if (iName >= 0) {
+      name = parts[iName]; grade = iGrade >= 0 ? (parts[iGrade] || '') : ''; cls = iClass >= 0 ? (parts[iClass] || '') : '';
+    } else if (parts.length > 1 && /^\d|年級/.test(parts[0])) {
+      name = parts[parts.length - 1]; grade = parts[0]; cls = parts.slice(1, -1).join(' ');
+    } else {
+      name = parts[0]; grade = parts[1] || ''; cls = parts.slice(2).join(' ');
+    }
+    if (!name) continue;
+    grade = grade.replace(/\.0+$/, '').replace(/年級$/, '');
+    out.push({ name, grade, cls, group: [grade && `${grade}年級`, cls].filter(Boolean).join(' '), key: normName(name) });
+  }
+  return out;
 }
 
 /** 批改一份問卷，回傳每位學生的結果 */
@@ -66,18 +109,60 @@ export async function renderSurvey(root, ctx) {
     S.deadlineDate = trips[0]?.date || todayISO();
   }
 
-  const roster = el('textarea', { placeholder: '一行一位學生，例如：\n3年級,王小明\n3年級,陳小華\n（也可以只寫名字）', style: 'min-height:140px' });
+  // 老師按過「記住名單」的話，就自動載入（存在老師自己的帳號裡，不在公開的程式碼裡）
+  if (!S.roster && ctx.settings?.roster) S.roster = ctx.settings.roster;
+  const roster = el('textarea', { placeholder: '可以直接上傳 Excel，或從 Excel 複製貼上，例如：\n姓名\t年級\t班別\n王小明\t3\t快樂兔', style: 'min-height:140px' });
   roster.value = S.roster;
-  roster.addEventListener('input', () => { S.roster = roster.value; draw(); });
+  const rosterInfo = el('div', { class: 'muted' });
+  const drawRosterInfo = () => {
+    const list = parseRoster(S.roster);
+    const saved = !!ctx.settings?.roster && ctx.settings.roster === S.roster;
+    const byCls = {};
+    list.forEach(s => { const k = s.cls || '（沒有班別）'; byCls[k] = (byCls[k] || 0) + 1; });
+    rosterInfo.textContent = list.length
+      ? `讀到 ${list.length} 位學生：${Object.entries(byCls).map(([k, n]) => `${k} ${n} 人`).join('、')}${saved ? '　✅ 已記住' : '　（還沒記住）'}`
+      : '';
+  };
+  roster.addEventListener('input', () => { S.roster = roster.value; drawRosterInfo(); draw(); });
+  const rosterFile = el('input', { type: 'file', accept: '.xlsx,.xls,.csv,.txt', hidden: true });
+  rosterFile.addEventListener('change', async () => {
+    const f = rosterFile.files[0];
+    rosterFile.value = '';
+    if (!f) return;
+    try {
+      const rows = /\.xlsx?$/i.test(f.name) ? await readXlsxRows(f) : parseCSV(await f.text());
+      S.roster = rows.map(r => r.join('\t')).join('\n');
+      roster.value = S.roster;
+      drawRosterInfo(); draw();
+      ctx.toast(`已讀入名單：${parseRoster(S.roster).length} 位學生`);
+    } catch (e) { ctx.toast(e.message); }
+  });
+  const rememberBtn = el('button', { class: 'btn', onclick: async () => {
+    if (!parseRoster(S.roster).length) { ctx.toast('名單是空的'); return; }
+    await ctx.store.saveSettings({ ...ctx.settings, roster: S.roster });
+    await ctx.reloadSettings();
+    drawRosterInfo();
+    ctx.toast('已記住名單，下次打開會自動載入');
+  } }, '💾 記住這份名單');
+  const forgetBtn = el('button', { class: 'btn danger', onclick: async () => {
+    if (!confirm('確定要清除記住的名單嗎？')) return;
+    const { roster: _r, ...rest } = ctx.settings || {};
+    await ctx.store.saveSettings(rest);
+    await ctx.reloadSettings();
+    drawRosterInfo();
+    ctx.toast('已清除記住的名單');
+  } }, '🗑️ 清除記住的名單');
   const dDate = el('input', { type: 'date', value: S.deadlineDate });
   const dTime = el('input', { type: 'text', value: S.deadlineTime, placeholder: '23:59', style: 'max-width:120px' });
   dDate.addEventListener('change', () => { S.deadlineDate = dDate.value; draw(); });
   dTime.addEventListener('input', () => { S.deadlineTime = dTime.value; draw(); });
 
-  const fileInput = el('input', { type: 'file', accept: '.csv,text/csv', multiple: true, hidden: true });
+  const fileInput = el('input', { type: 'file', accept: '.csv,text/csv,.xlsx', multiple: true, hidden: true });
   fileInput.addEventListener('change', async () => {
     for (const f of fileInput.files) {
-      const rows = parseCSV(await f.text());
+      let rows;
+      try { rows = /\.xlsx?$/i.test(f.name) ? await readXlsxRows(f) : parseCSV(await f.text()); }
+      catch (e) { ctx.toast(e.message); continue; }
       if (rows.length < 1) { ctx.toast(`「${f.name}」是空的`); continue; }
       const headers = rows[0].map(h => h.trim());
       const idCol = guessCol(headers, ID_HINTS);
@@ -114,8 +199,12 @@ export async function renderSurvey(root, ctx) {
     const late = [...submitted.values()].filter(r => r.late);
     const unknown = list.length ? [...submitted.values()].filter(r => !list.some(s => s.key === r.key)) : [];
 
+    // 未交名單依班別分組，方便各班提醒
+    const missByCls = {};
+    missing.forEach(s => { const k = s.group || '其他'; (missByCls[k] = missByCls[k] || []).push(s.name); });
     const summaryText = [
-      `未交（${missing.length}）：${missing.map(s => s.name).join('、') || '無'}`,
+      `未交（${missing.length}）：${missing.length ? '' : '無'}`,
+      ...Object.entries(missByCls).map(([k, names]) => `・${k}：${names.join('、')}`),
       `遲交（${late.length}）：${late.map(r => r.name).join('、') || '無'}`,
     ].join('\n');
 
@@ -185,7 +274,7 @@ export async function renderSurvey(root, ctx) {
 
   root.replaceChildren(
     el('h1', {}, '📊 問卷檢查'),
-    el('div', { class: 'notice ok' }, '🔒 名單和問卷回覆只在這個畫面裡處理，不會被儲存，也不會傳給 AI。重新整理網頁就會清空。'),
+    el('div', { class: 'notice ok' }, '🔒 問卷回覆只在這個畫面裡處理，不會被儲存，也不會傳給 AI。名單只有在你按「記住這份名單」時，才會存在你自己的帳號裡。'),
     el('div', { class: 'card' },
       el('h2', {}, el('span', { class: 'step-num' }, '1'), '下載問卷回覆'),
       el('ol', { class: 'muted' },
@@ -193,11 +282,16 @@ export async function renderSurvey(root, ctx) {
         el('li', {}, '按右上角「⋮」→「下載回覆（.csv）」。如果是連到試算表，就在試算表按「檔案 → 下載 → 逗號分隔值（.csv）」。'),
         el('li', {}, '1-2 年級和 3-8 年級兩份都下載，一起上傳。'),
       ),
-      el('div', { class: 'btns' }, el('button', { class: 'btn primary', onclick: () => fileInput.click() }, '📂 上傳回覆 CSV'), fileInput),
+      el('div', { class: 'btns' }, el('button', { class: 'btn primary', onclick: () => fileInput.click() }, '📂 上傳回覆（CSV 或 Excel）'), fileInput),
     ),
     el('div', { class: 'card' },
       el('h2', {}, el('span', { class: 'step-num' }, '2'), '學生名單（用來找出誰沒交）'),
+      el('div', { class: 'btns', style: 'margin-top:0' },
+        el('button', { class: 'btn primary', onclick: () => rosterFile.click() }, '📂 上傳名單 Excel'), rosterFile,
+        rememberBtn, forgetBtn),
+      el('p', { class: 'muted' }, '⚠️ 名單有學生名字，不要放到 GitHub 或任何公開的地方。'),
       roster,
+      rosterInfo,
       el('div', { class: 'row' },
         el('div', {}, el('label', {}, '截止日期'), dDate),
         el('div', {}, el('label', {}, '截止時間'), dTime),
@@ -205,5 +299,6 @@ export async function renderSurvey(root, ctx) {
     ),
     body,
   );
+  drawRosterInfo();
   draw();
 }
