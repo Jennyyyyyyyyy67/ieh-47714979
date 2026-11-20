@@ -1,0 +1,9 @@
+rules_version = '2';
+// 每位老師只能讀寫自己的抽屜 users/{自己的uid}/...
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

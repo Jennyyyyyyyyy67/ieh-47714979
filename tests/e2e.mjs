@@ -1,0 +1,364 @@
+// 自動測試：用假的 Gemini 回覆，測整個流程（本機試用模式）
+// 執行方式：先在專案資料夾開伺服器 `python3 -m http.server 8765`，再 `node tests/e2e.mjs`
+import { chromium } from 'playwright';
+import assert from 'node:assert/strict';
+
+const BASE = process.env.BASE || 'http://localhost:8765/';
+const SHOTS = process.env.SHOTS || '';
+const results = [];
+const step = async (name, fn) => {
+  try { await fn(); results.push(['✅', name]); }
+  catch (e) { results.push(['❌', name, e.message.split('\n')[0]]); }
+};
+
+const geminiCalls = [];
+async function mockGemini(page) {
+  await page.route('https://generativelanguage.googleapis.com/**', async route => {
+    const req = route.request();
+    const url = req.url();
+    if (url.includes('/models?')) {
+      return route.fulfill({ json: { models: [{ name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] }] } });
+    }
+    const body = JSON.parse(req.postData());
+    const text = body.contents[0].parts.find(p => p.text)?.text || '';
+    const images = body.contents[0].parts.filter(p => p.inline_data).length;
+    geminiCalls.push({ text, images, key: req.headers()['x-goog-api-key'] });
+    let out;
+    if (text.includes('逐張看照片')) {
+      out = { photos: [
+        { index: 1, seen: '孩子們在書架前找書', highlights: ['用分類號找書'], uncertain: ['看不出是哪一區'], privacy: [] },
+        { index: 2, seen: '大家在館外合照', highlights: [], uncertain: ['無'], privacy: ['可看見清楚正臉'] },
+      ] };
+    } else if (text.includes('週會逐字稿')) {
+      // 第一次（上限 300）故意回太長；精簡那次（上限 < 300）回正常長度
+      out = { letter: /一定要在 300 字以內/.test(text)
+        ?'親愛的家長您好：\n\n' + '長'.repeat(320)
+        : '親愛的家長您好：\n\n本週週會蓓禎老師帶領領袖們學習尊重：\n\n【成熟領袖的選擇：尊重每個人】\n小標一\n內容一\n\n小標二\n內容二\n\n讓我們一起成為祝福！\n\n【領袖挑戰：讚美行動】\n本週每天讚美一位同學。' };
+    } else {
+      out = {
+        line_title: '城市裡的知識座標：走進高雄市總圖 🏙️📖',
+        line_body: '爸爸媽媽，你知道圖書館藏著多少看世界的方式嗎？今天我們帶孩子造訪總圖！\n孩子們練習用分類號找書，也和3年2班的同學交換閱讀✨',
+        home_questions: ['你今天用什麼方法找到想看的書？', '圖書館的書是怎麼分類的？'],
+        fb_post: 'FB 貼文內容', ig_caption: 'IG 內容', ig_hashtags: ['戶外踏查', '#高雄市圖'],
+        teaching_process: '・主題書區導覽\n・用分類號找書', class_connection: '連結到圖書分類概念',
+        fact_check: [{ claim: '用分類號找書', source: '行程表' }],
+      };
+    }
+    return route.fulfill({ json: { candidates: [{ content: { parts: [{ text: JSON.stringify(out) }] } }] } });
+  });
+}
+
+async function makeJpeg(page, w, h, color) {
+  const b64 = await page.evaluate(([w, h, color]) => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d'); g.fillStyle = color; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#fff'; g.font = '200px sans-serif'; g.fillText('TEST', 100, 300);
+    return c.toDataURL('image/jpeg', 0.95).split(',')[1];
+  }, [w, h, color]);
+  return Buffer.from(b64, 'base64');
+}
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
+const page = await context.newPage();
+const pageErrors = [];
+page.on('pageerror', e => pageErrors.push(e.message));
+page.on('dialog', d => d.accept());
+await mockGemini(page);
+await page.goto(BASE);
+
+await step('註冊老師 A 並登入', async () => {
+  await page.fill('input[type=email]', 'teacherA@example.com');
+  await page.fill('input[type=password]', 'secret123');
+  await page.click('text=第一次使用：註冊');
+  await page.waitForSelector('text=⚙️ 設定');
+  assert.ok(await page.isVisible('text=本機試用模式'));
+});
+
+await step('密碼太短會被擋下', async () => {
+  const p2 = await context.newPage();
+  await p2.goto(BASE);
+  // 同一個瀏覽器已登入，先登出
+  if (await p2.isVisible('text=登出')) { await p2.click('text=登出'); }
+  await p2.fill('input[type=email]', 'x@example.com');
+  await p2.fill('input[type=password]', '123');
+  await p2.click('text=第一次使用：註冊');
+  await p2.waitForSelector('text=密碼太短');
+  await p2.close();
+  await page.reload();
+  // 被另一頁登出了，重新登入
+  if (await page.isVisible('text=老師登入')) {
+    await page.fill('input[type=email]', 'teacherA@example.com');
+    await page.fill('input[type=password]', 'secret123');
+    await page.click('button:has-text("登入")');
+  }
+  await page.waitForSelector('text=⚙️ 設定');
+});
+
+await step('設定 Gemini 鑰匙並檢查', async () => {
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.fill('input[placeholder*="AI Studio"]', 'FAKE-KEY-123');
+  await page.click('text=🔑 檢查鑰匙');
+  await page.waitForSelector('text=鑰匙可以用');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+});
+
+await step('主題庫：新增一個單元', async () => {
+  await page.click('.tabs >> text=📚 學習主題庫');
+  await page.fill('input[placeholder*="3-4年級"]', '全年級');
+  await page.fill('input[placeholder*="社會、自然"]', '戶外踏查');
+  await page.fill('input[placeholder*="社區的公共服務"]', '認識城市地標');
+  const formTa = page.locator('.card').first().locator('textarea');
+  await formTa.nth(0).fill('圖書分類\n公共空間禮儀');
+  await formTa.nth(1).fill('能用分類號找到書');
+  await page.click('button:has-text("儲存")');
+  await page.waitForSelector('.topic >> text=認識城市地標');
+});
+
+await step('主題庫：一次貼上多行（含標題列、Tab 分隔以外的 CSV）', async () => {
+  await page.fill('.card:has-text("一次貼上多行") textarea', '年級,學科,單元名稱,學習概念,學習目標\n3-4年級,社會,社區的公共服務,公共設施的功能;垃圾處理流程,能說出焚化廠的功能\n3-4年級,自然,資源回收,垃圾分類與資源回收,能正確分類垃圾\n,,,沒有名稱這行要略過,');
+  await page.click('text=加入這些單元');
+  await page.waitForSelector('text=已匯入 2 個');
+  assert.ok(await page.isVisible('text=第 4 行沒有'));
+  assert.equal(await page.locator('.topic').count(), 3);
+});
+
+await step('主題庫：匯入 CSV 檔（含引號與逗號）', async () => {
+  await page.setInputFiles('input[type=file][accept*=csv]', { name: 't.csv', mimeType: 'text/csv', buffer: Buffer.from('﻿年級,學科,單元名稱,學習概念,學習目標\n5年級,藝術,"美術館, 觀察",色彩;構圖,能說出作品特色\n') });
+  await page.waitForSelector('text=已匯入 1 個');
+  await page.waitForSelector('.topic >> text=美術館, 觀察');
+});
+
+await step('主題庫：修改', async () => {
+  await page.locator('.topic', { hasText: '美術館, 觀察' }).locator('text=修改').click();
+  await page.fill('input[placeholder*="社區的公共服務"]', '美術館觀察');
+  await page.click('button:has-text("儲存")');
+  await page.waitForSelector('.topic >> text=美術館觀察');
+});
+
+await step('主題庫：刪除', async () => {
+  await page.locator('.topic', { hasText: '美術館觀察' }).locator('text=刪除').click();
+  await page.waitForSelector('text=已刪除');
+  assert.equal(await page.locator('.topic').count(), 3);
+});
+
+await step('踏查：沒勾肖像同意前不能選照片', async () => {
+  await page.click('.tabs >> text=🚌 踏查');
+  assert.ok(await page.isDisabled('text=📷 選擇照片'));
+});
+
+let resized;
+await step('踏查：照片上傳前自動縮小（4000x3000 → 長邊 1280）', async () => {
+  await page.fill('input[placeholder*="高雄市立圖書館"]', '高雄市立圖書館總館');
+  await page.fill('textarea[placeholder*="行程表、學習單的文字"]', '09:30 主題書區導覽\n10:30 用分類號找書、交換閱讀');
+  await page.check('text=我確認：要上傳的照片裡');
+  const big = await makeJpeg(page, 4000, 3000, '#2a6');
+  const small = await makeJpeg(page, 800, 600, '#a62');
+  await page.setInputFiles('input[type=file][accept="image/*"]', [
+    { name: 'a.jpg', mimeType: 'image/jpeg', buffer: big },
+    { name: 'b.jpg', mimeType: 'image/jpeg', buffer: small },
+  ]);
+  await page.waitForSelector('.photo >> nth=1');
+  resized = await page.$$eval('.photo img', imgs => imgs.map(i => [i.naturalWidth, i.naturalHeight]));
+  assert.deepEqual(resized[0], [1280, 960]);
+  assert.deepEqual(resized[1], [800, 600]);
+});
+
+await step('踏查：照片沒核對前不能產生文案', async () => {
+  assert.ok(await page.isDisabled('text=✨ 產生文案'));
+});
+
+await step('踏查：AI 列出每張照片看到什麼／不確定的地方／個資提醒', async () => {
+  await page.click('text=🔍 請 AI 看照片');
+  await page.waitForSelector('text=照片 2', { state: 'visible' });
+  await page.waitForSelector('text=個資提醒：可看見清楚正臉');
+  const vals = await page.locator('.review textarea').evaluateAll(els => els.map(e => e.value));
+  assert.ok(vals.includes('孩子們在書架前找書'), '看到了什麼');
+  assert.ok(vals.includes('看不出是哪一區'), '不確定的地方');
+  const last = geminiCalls.at(-1);
+  assert.equal(last.images, 2, '應該送出 2 張照片');
+  assert.equal(last.key, 'FAKE-KEY-123');
+  assert.ok(last.text.includes('不可以辨認'), '提示詞要包含不可認人');
+});
+
+await step('踏查：老師核對後打勾才解鎖', async () => {
+  await page.locator('.review textarea').first().fill('孩子們在書架前用分類號找書');
+  await page.check('text=我已經核對過每張照片的描述');
+  assert.ok(!(await page.isDisabled('text=✨ 產生文案')));
+});
+
+await step('踏查：多選單元概念＋問卷連結', async () => {
+  await page.check('label:has-text("圖書分類")');
+  await page.check('label:has-text("垃圾分類與資源回收")');
+  await page.waitForSelector('.tag:has-text("戶外踏查／圖書分類")');
+  await page.fill('input[type=url] >> nth=0', 'https://forms.gle/AAA');
+  await page.fill('input[type=url] >> nth=1', 'https://forms.gle/BBB');
+  const titles = await page.textContent('.bubble');
+  assert.ok(/戶外踏查1-2年級問卷_高雄市立圖書館總館/.test(titles));
+  assert.ok(/^\d{3}\/\d{2}\/\d{2} /.test(titles), '民國日期格式');
+});
+
+await step('踏查：產生四種版本＋問卷題目', async () => {
+  await page.click('text=✨ 產生文案');
+  await page.waitForSelector('text=📝 教學紀錄', { timeout: 10000 });
+  const last = geminiCalls.at(-1);
+  assert.ok(last.text.includes('圖書分類'), '提示詞包含選的概念');
+  assert.ok(last.text.includes('孩子們在書架前用分類號找書'), '提示詞用老師核對過的描述');
+});
+
+const outText = async (title) => page.locator('.output-block', { hasText: title }).locator('textarea').inputValue();
+
+await step('LINE 版：照範本格式、附問卷連結和 12 點提醒', async () => {
+  const t = await outText('家長群組溫馨回顧');
+  assert.ok(t.startsWith('【戶外踏查】城市裡的知識座標'));
+  assert.ok(t.includes('1-2年級問卷：\nhttps://forms.gle/AAA'));
+  assert.ok(t.includes('3-8年級問卷：\nhttps://forms.gle/BBB'));
+  assert.ok(t.trim().endsWith('✨請提醒孩子們今天晚上12點前要送出問卷喔！'));
+  assert.ok(!t.includes('回家可以問問孩子'), '預設回家問題不放 LINE');
+});
+
+await step('問卷區塊：有標題和回家可以問孩子的問題', async () => {
+  const t = await outText('問卷標題＋題目');
+  assert.ok(t.includes('戶外踏查3-8年級問卷_高雄市立圖書館總館'));
+  assert.ok(t.includes('1. 你今天用什麼方法找到想看的書？'));
+});
+
+await step('IG：hashtag 有 # 而且不重複 #', async () => {
+  const t = await outText('Instagram 貼文');
+  assert.ok(t.includes('#戶外踏查 #高雄市圖'));
+});
+
+await step('教學紀錄：寫出單元、概念、學習目標，教學省思留空', async () => {
+  const t = await outText('📝 教學紀錄');
+  assert.ok(t.includes('全年級 戶外踏查｜認識城市地標：圖書分類'));
+  assert.ok(t.includes('3-4年級 自然｜資源回收：垃圾分類與資源回收'));
+  assert.ok(t.includes('・能用分類號找到書'));
+  assert.ok(t.includes('・能正確分類垃圾'));
+  assert.ok(/教學省思：\s*$/.test(t), '教學省思後面要是空的');
+});
+
+await step('個資檢查：抓到「3年2班」', async () => {
+  const blk = page.locator('.output-block', { hasText: '家長群組溫馨回顧' });
+  await blk.locator('text=像是班級').waitFor();
+});
+
+await step('個資檢查：輸入學生名字（不儲存）也會抓', async () => {
+  const blk = page.locator('.output-block', { hasText: 'Facebook 貼文' });
+  await blk.locator('textarea').fill('今天王小明表現很好');
+  await page.fill('input[placeholder*="王小明"]', '王小明');
+  await blk.locator('text=出現了你輸入的學生名字').waitFor();
+  await blk.locator('textarea').fill('FB 貼文內容');
+});
+
+await step('檢查清單：沒全勾前 LINE/FB/IG 不能複製，教學紀錄可以', async () => {
+  const lineBtn = page.locator('.output-block', { hasText: '家長群組溫馨回顧' }).locator('button:has-text("一鍵複製")');
+  const recBtn = page.locator('.output-block', { hasText: '📝 教學紀錄' }).locator('button:has-text("一鍵複製")');
+  assert.ok(await lineBtn.isDisabled());
+  assert.ok(!(await recBtn.isDisabled()));
+  const boxes = page.locator('.checklist input[type=checkbox]');
+  for (let i = 0; i < 3; i++) await boxes.nth(i).check();
+  assert.ok(await lineBtn.isDisabled(), '只勾 3 項還不能複製');
+  await boxes.nth(3).check();
+  assert.ok(!(await lineBtn.isDisabled()));
+});
+
+await step('一鍵複製：剪貼簿真的拿到文字', async () => {
+  await page.locator('.output-block', { hasText: '家長群組溫馨回顧' }).locator('button:has-text("一鍵複製")').click();
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  assert.ok(clip.startsWith('【戶外踏查】'));
+});
+
+await step('照片不會被存進資料庫', async () => {
+  const dump = await page.evaluate(() => JSON.stringify(Object.fromEntries(Object.keys(localStorage).map(k => [k, localStorage.getItem(k)]))));
+  assert.ok(dump.includes('高雄市立圖書館總館'), '踏查文字有存');
+  assert.ok(!dump.includes('data:image'), '不能有照片');
+  assert.ok(!dump.includes('base64'), '不能有照片 base64');
+  assert.ok(!dump.includes('王小明'), '檢查用的學生名字不能存');
+});
+
+if (SHOTS) {
+  await page.screenshot({ path: `${SHOTS}/desktop-trip.png`, fullPage: true });
+}
+
+await step('週會：超過 300 字會自動再精簡一次', async () => {
+  await page.click('.tabs >> text=⛪ 週會');
+  await page.fill('textarea[placeholder*="逐字稿"]', '今天我們要談尊重。'.repeat(20));
+  const before = geminiCalls.length;
+  await page.click('text=✨ 整理成家長信');
+  await page.waitForSelector('text=💌 週會家長信');
+  const t = await outText('週會家長信');
+  assert.ok(t.startsWith('親愛的家長您好'));
+  assert.ok(t.includes('【領袖挑戰'));
+  assert.equal(geminiCalls.length - before, 2, '應該呼叫兩次（第二次精簡）');
+  const counter = await page.locator('.output-block .counter').textContent();
+  assert.ok(/\/ 300 字/.test(counter));
+  assert.ok(!(await page.locator('.output-block .counter').getAttribute('class')).includes('over'));
+});
+
+await step('本週發送：順序是 週會 → 踏查 → 照片，有後台連結', async () => {
+  await page.click('.tabs >> text=📤 本週發送');
+  const titles = await page.locator('.output-block h3').allTextContents();
+  assert.ok(titles[0].includes('週會'));
+  assert.ok(titles[1].includes('踏查'));
+  assert.ok(titles[2].includes('照片'));
+  assert.ok(await page.isVisible('a[href="https://manager.line.biz/"]'));
+  assert.ok(await page.isVisible('a[href="https://business.facebook.com/latest/home"]'));
+  assert.ok(await page.isDisabled('text=📋 依順序全部複製'));
+});
+
+await step('紀錄：可以重新打開舊的踏查', async () => {
+  await page.click('.tabs >> text=🗂️ 紀錄');
+  await page.locator('.list-item', { hasText: '高雄市立圖書館總館' }).locator('text=打開').click();
+  await page.waitForSelector('text=正在編輯');
+  assert.equal(await page.inputValue('input[placeholder*="高雄市立圖書館"]'), '高雄市立圖書館總館');
+});
+
+await step('不同老師的資料分開', async () => {
+  await page.click('text=登出');
+  await page.fill('input[type=email]', 'teacherB@example.com');
+  await page.fill('input[type=password]', 'secret456');
+  await page.click('text=第一次使用：註冊');
+  await page.waitForSelector('text=⚙️ 設定');
+  await page.click('.tabs >> text=🗂️ 紀錄');
+  await page.waitForSelector('text=🚌 踏查（0）');
+  await page.click('.tabs >> text=📚 學習主題庫');
+  await page.waitForSelector('text=還沒有任何單元');
+  await page.click('text=登出');
+  await page.fill('input[type=email]', 'teacherA@example.com');
+  await page.fill('input[type=password]', 'wrongpass');
+  await page.click('button:has-text("登入")');
+  await page.waitForSelector('text=Email 或密碼錯誤');
+});
+
+// 手機畫面
+const mobile = await browser.newContext({ viewport: { width: 375, height: 740 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+const mp = await mobile.newPage();
+mp.on('pageerror', e => pageErrors.push(e.message));
+await step('手機畫面：沒有左右捲動', async () => {
+  await mp.goto(BASE);
+  await mp.fill('input[type=email]', 'm@example.com');
+  await mp.fill('input[type=password]', 'secret789');
+  await mp.click('text=第一次使用：註冊');
+  await mp.waitForSelector('text=⚙️ 設定');
+  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📚 學習主題庫', '🗂️ 紀錄', '⚙️ 設定']) {
+    await mp.click(`.tabs >> text=${tab}`);
+    await mp.waitForTimeout(150);
+    const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok(overflow <= 0, `${tab} 有左右捲動 ${overflow}px`);
+  }
+  if (SHOTS) {
+    await mp.click('.tabs >> text=🚌 踏查');
+    await mp.screenshot({ path: `${SHOTS}/mobile-trip.png`, fullPage: false });
+  }
+});
+
+await step('沒有 JavaScript 錯誤', async () => {
+  assert.deepEqual(pageErrors, []);
+});
+
+await browser.close();
+for (const r of results) console.log(r.join(' '));
+const failed = results.filter(r => r[0] === '❌').length;
+console.log(`\n${results.length - failed} 通過，${failed} 失敗`);
+process.exit(failed ? 1 : 0);
