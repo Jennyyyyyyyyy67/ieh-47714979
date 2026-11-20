@@ -1,5 +1,5 @@
 // 📤 本週發送（照 LINE 實際順序：週會 → 踏查 → 照片）與 🗂️ 紀錄
-import { el, toROC, copyText } from '../utils.js';
+import { el, toROC, todayISO, downloadFile, copyText, thisWeekSendTime, formatDateTime, weekdayName } from '../utils.js';
 import { publishChecklist, outputBlock, LINKS } from './common.js';
 
 export async function renderPublish(root, ctx) {
@@ -61,9 +61,19 @@ export async function renderPublish(root, ctx) {
     );
   }
 
+  const st = ctx.settings || {};
+  const sendAt = thisWeekSendTime(new Date(), st.sendWeekday ?? 2, st.sendTime || '17:00');
+  const now = new Date();
+  const mins = Math.round((sendAt - now) / 60000);
+  const sched = mins > 0
+    ? el('div', { class: 'notice warn schedule' }, '⏰ 本週發送時間：', el('strong', {}, formatDateTime(sendAt)),
+        `　還有 ${mins >= 60 * 24 ? `${Math.floor(mins / 1440)} 天 ` : ''}${Math.floor((mins % 1440) / 60)} 小時 ${mins % 60} 分。可以先準備好，時間到再發。`)
+    : el('div', { class: 'notice ok schedule' }, '⏰ 本週發送時間：', el('strong', {}, formatDateTime(sendAt)), '　已經到了，老師確認後就可以發送。');
+
   root.replaceChildren(
     el('h1', {}, '📤 本週發送'),
-    el('p', { class: 'muted' }, '照你們 LINE 實際的順序：週會 → 踏查 → 照片。'),
+    sched,
+    el('p', { class: 'muted' }, `照你們 LINE 實際的順序：週會 → 踏查 → 照片。每週${weekdayName(st.sendWeekday ?? 2)} ${st.sendTime || '17:00'} 發送，發送前老師一定要確認過。`),
     el('div', { class: 'card' },
       el('div', { class: 'row' },
         el('div', {}, el('label', {}, '週會'), meetSel),
@@ -77,6 +87,12 @@ export async function renderPublish(root, ctx) {
 
 export async function renderHistory(root, ctx) {
   const { store, toast } = ctx;
+  const days = ctx.settings?.retentionDays ?? 7;
+  const expireText = (item) => {
+    if (!days || !item.createdAt) return '';
+    const d = new Date(item.createdAt + days * 86400000);
+    return `　（${d.getMonth() + 1}/${d.getDate()} 自動刪除）`;
+  };
   const [trips, meetings] = await Promise.all([store.list('trips'), store.list('meetings')]);
   const del = async (col, item, label) => {
     if (!confirm(`確定要刪除「${label}」嗎？刪掉就找不回來了。`)) return;
@@ -87,11 +103,20 @@ export async function renderHistory(root, ctx) {
   root.replaceChildren(
     el('h1', {}, '🗂️ 紀錄'),
     el('p', { class: 'muted' }, '這裡只存文字（行程表、核對過的照片描述、文案）。照片從來不會被儲存。'),
+    el('div', { class: 'notice warn' }, (ctx.settings?.retentionDays ?? 7) > 0
+      ? `🧹 紀錄會在建立 ${ctx.settings?.retentionDays ?? 7} 天後自動刪除（清容量）。教學紀錄要保存的話，請先按「下載備份」。`
+      : '自動刪除已關閉（可以在設定打開）。'),
+    el('div', { class: 'btns' }, el('button', { class: 'btn', onclick: () => {
+      const lines = [];
+      for (const t of trips) { lines.push(`==== 踏查 ${toROC(t.date)} ${t.place} ====`); for (const [k, v] of Object.entries(t.texts || {})) lines.push(`--- ${k} ---`, v, ''); }
+      for (const m of meetings) lines.push(`==== 週會 ${toROC(m.date)} ====`, m.letter || '', '');
+      downloadFile(`踏查週會備份_${toROC(todayISO()).replace(/\//g, '')}.txt`, lines.join('\n'), 'text/plain');
+    } }, '⬇️ 下載備份（文字檔）')),
     el('div', { class: 'card' },
       el('h2', {}, `🚌 踏查（${trips.length}）`),
       trips.length ? null : el('p', { class: 'muted' }, '還沒有紀錄'),
       ...trips.map(t => el('div', { class: 'list-item' },
-        el('span', {}, `${toROC(t.date)}　${t.place}${t.title ? `｜${t.title}` : ''}`),
+        el('span', {}, `${toROC(t.date)}　${t.place}${t.title ? `｜${t.title}` : ''}`, el('span', { class: 'muted' }, expireText(t))),
         el('div', { class: 'btns', style: 'margin:0' },
           el('button', { class: 'btn small', onclick: () => ctx.go('trip', { trip: t }) }, '打開'),
           el('button', { class: 'btn small danger', onclick: () => del('trips', t, `${toROC(t.date)} ${t.place}`) }, '刪除'),
@@ -102,7 +127,7 @@ export async function renderHistory(root, ctx) {
       el('h2', {}, `⛪ 週會（${meetings.length}）`),
       meetings.length ? null : el('p', { class: 'muted' }, '還沒有紀錄'),
       ...meetings.map(m => el('div', { class: 'list-item' },
-        el('span', {}, `${toROC(m.date)}　${m.weekInfo || ''}週會`),
+        el('span', {}, `${toROC(m.date)}　${m.weekInfo || ''}週會`, el('span', { class: 'muted' }, expireText(m))),
         el('div', { class: 'btns', style: 'margin:0' },
           el('button', { class: 'btn small', onclick: () => ctx.go('meeting', { meeting: m }) }, '打開'),
           el('button', { class: 'btn small danger', onclick: () => del('meetings', m, `${toROC(m.date)} 週會`) }, '刪除'),

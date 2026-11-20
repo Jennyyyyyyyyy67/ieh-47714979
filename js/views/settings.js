@@ -12,6 +12,9 @@ export async function renderSettings(root, ctx) {
   const model = el('input', { type: 'text', value: s.model || DEFAULT_MODEL, list: 'modelList' });
   const modelList = el('datalist', { id: 'modelList' });
   const speaker = el('input', { type: 'text', value: s.speaker || '蓓禎老師' });
+  const sendWeekday = el('select', {}, ...['日', '一', '二', '三', '四', '五', '六'].map((d, i) => el('option', { value: String(i), selected: i === (s.sendWeekday ?? 2) }, `星期${d}`)));
+  const sendTime = el('input', { type: 'time', value: s.sendTime || '17:00' });
+  const retention = el('select', {}, ...[[7, '7 天後自動刪除（建議）'], [14, '14 天後自動刪除'], [30, '30 天後自動刪除'], [0, '不要自動刪除']].map(([v, t]) => el('option', { value: String(v), selected: v === (s.retentionDays ?? 7) }, t)));
   const msg = el('div');
   const testBtn = el('button', { class: 'btn' }, '🔑 檢查鑰匙');
   testBtn.addEventListener('click', async () => {
@@ -28,7 +31,7 @@ export async function renderSettings(root, ctx) {
   });
   const saveBtn = el('button', { class: 'btn primary' }, '💾 儲存設定');
   saveBtn.addEventListener('click', async () => {
-    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, speaker: speaker.value.trim() };
+    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, speaker: speaker.value.trim(), sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value) };
     await store.saveSettings(next);
     await ctx.reloadSettings();
     toast('設定已儲存');
@@ -55,6 +58,15 @@ export async function renderSettings(root, ctx) {
     el('div', { class: 'card' },
       el('h2', {}, '⛪ 週會'),
       el('label', {}, '預設分享的老師'), speaker,
+    ),
+    el('div', { class: 'card' },
+      el('h2', {}, '⏰ 發送時間與清容量'),
+      el('div', { class: 'row' },
+        el('div', {}, el('label', {}, '每週發送日'), sendWeekday),
+        el('div', {}, el('label', {}, '發送時間'), sendTime),
+      ),
+      el('label', {}, '舊紀錄（踏查、週會）'), retention,
+      el('p', { class: 'muted' }, '每次登入時會自動清掉太舊的紀錄。學習主題庫不會被刪。教學紀錄請記得先複製到學校的檔案裡。'),
     ),
     el('div', { class: 'card' },
       el('div', { class: 'btns', style: 'margin-top:0' }, saveBtn),

@@ -374,7 +374,7 @@ export async function renderTrip(root, ctx) {
     add('survey', '📋 問卷標題＋題目（給 Google 表單）', false);
     add('fb', '📘 Facebook 貼文', true);
     add('ig', '📸 Instagram 貼文', true, 'IG 一定要附照片，請在 IG 裡自己選照片後貼上這段文字。');
-    add('record', '📝 教學紀錄', false, '「教學省思」故意留空，請老師自己寫。');
+    add('record', '📝 教學紀錄', false, `「教學省思」故意留空，請老師自己寫。⚠️ 紀錄 ${ctx.settings?.retentionDays ?? 7} 天後會自動刪除，教學紀錄請先複製到學校的檔案裡保存。`);
     names.addEventListener('input', () => { namesForCheck = names.value; blocks.forEach(b => b.refresh()); });
     const fc = (S.result?.fact_check || []);
     resultBox.replaceChildren(

@@ -314,6 +314,66 @@ await step('紀錄：可以重新打開舊的踏查', async () => {
   assert.equal(await page.inputValue('input[placeholder*="高雄市立圖書館"]'), '高雄市立圖書館總館');
 });
 
+await step('本週發送：顯示每週二 17:00 發送時間', async () => {
+  await page.click('.tabs >> text=📤 本週發送');
+  const t = await page.textContent('.schedule');
+  assert.ok(/本週發送時間：\d+\/\d+（二）17:00/.test(t), t);
+});
+
+await step('問卷檢查：找出未交、遲交、重複、打錯字，並批改答案', async () => {
+  await page.click('.tabs >> text=📊 問卷檢查');
+  await page.fill('input[type=date]', '2026-11-17');
+  await page.fill('textarea', '3年級,王小明\n3年級,陳小華\n4年級,林大同');
+  const csv = '時間戳記,分數,你的名字,圖書館的書用什麼分類？,你最喜歡哪一區？\n'
+    + '2026/11/17 下午 8:05:12,1 / 1,王小明,中國圖書分類法,兒童區\n'
+    + '2026/11/18 上午 12:30:00,0 / 1,陳 小華,依顏色,漫畫區\n'
+    + '2026/11/17 下午 9:00:00,1 / 1,王小明,中國圖書分類法,兒童區\n'
+    + '2026/11/17 下午 9:10:00,1 / 1,林大童,中國圖書分類法,期刊區\n';
+  await page.setInputFiles('input[type=file][accept*=csv]', { name: '3-8年級.csv', mimeType: 'text/csv', buffer: Buffer.from('﻿' + csv) });
+  await page.waitForSelector('text=共 4 筆回覆');
+  const sum = await page.textContent('.bubble');
+  assert.ok(sum.includes('未交（1）：林大同'), sum);
+  assert.ok(sum.includes('遲交（1）：陳 小華'), sum);
+  assert.ok(await page.isVisible('text=交了 2 次'));
+  assert.ok(await page.isVisible('text=林大童'));
+  assert.ok(await page.isVisible('text=名字對不到名單'));
+  assert.ok(await page.isVisible('td:has-text("表單：1/1")'));
+  // 自己設定正確答案
+  await page.click('text=設定正確答案');
+  await page.fill('input[placeholder*="正確答案"] >> nth=0', '中國圖書分類法');
+  await page.press('input[placeholder*="正確答案"] >> nth=0', 'Tab');
+  await page.waitForSelector('td:has-text("批改：0/1")');
+  await page.waitForSelector('text=2/3（67%）');
+  const dump = await page.evaluate(() => JSON.stringify(localStorage));
+  assert.ok(!dump.includes('林大同') && !dump.includes('陳小華'), '名單不能被儲存');
+});
+
+await step('設定：可以改保留天數和發送時間', async () => {
+  await page.click('.tabs >> text=⚙️ 設定');
+  assert.equal(await page.inputValue('input[type=time]'), '17:00');
+  await page.selectOption('select >> nth=1', '14');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+  await page.selectOption('select >> nth=1', '7');
+  await page.click('text=💾 儲存設定');
+});
+
+await step('清容量：超過 7 天的紀錄登入時自動刪除，新的保留', async () => {
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('tripapp:v1:session'));
+    const k = `tripapp:v1:data:${s.uid}:trips`;
+    const items = JSON.parse(localStorage.getItem(k) || '[]');
+    items.push({ id: 'old1', date: '2026-11-01', place: '很久以前的美術館', createdAt: Date.now() - 8 * 86400000, updatedAt: Date.now() - 8 * 86400000 });
+    localStorage.setItem(k, JSON.stringify(items));
+  });
+  await page.reload();
+  await page.waitForSelector('text=已自動清除 1 筆');
+  await page.click('.tabs >> text=🗂️ 紀錄');
+  assert.ok(!(await page.isVisible('text=很久以前的美術館')));
+  assert.ok(await page.isVisible('text=高雄市立圖書館總館'));
+  assert.ok(await page.isVisible('text=自動刪除）'));
+});
+
 await step('不同老師的資料分開', async () => {
   await page.click('text=登出');
   await page.fill('input[type=email]', 'teacherB@example.com');
@@ -341,7 +401,7 @@ await step('手機畫面：沒有左右捲動', async () => {
   await mp.fill('input[type=password]', 'secret789');
   await mp.click('text=第一次使用：註冊');
   await mp.waitForSelector('text=⚙️ 設定');
-  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📚 學習主題庫', '🗂️ 紀錄', '⚙️ 設定']) {
+  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📊 問卷檢查', '📚 學習主題庫', '🗂️ 紀錄', '⚙️ 設定']) {
     await mp.click(`.tabs >> text=${tab}`);
     await mp.waitForTimeout(150);
     const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

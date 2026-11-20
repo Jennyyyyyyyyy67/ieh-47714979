@@ -6,6 +6,7 @@ import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
 import { renderPublish, renderHistory } from './views/publish.js';
 import { renderSettings } from './views/settings.js';
+import { renderSurvey } from './views/survey.js';
 
 const app = document.getElementById('app');
 const tabsEl = document.getElementById('tabs');
@@ -17,6 +18,7 @@ const TABS = [
   { key: 'trip', label: '🚌 踏查', render: renderTrip },
   { key: 'meeting', label: '⛪ 週會', render: renderMeeting },
   { key: 'publish', label: '📤 本週發送', render: renderPublish },
+  { key: 'survey', label: '📊 問卷檢查', render: renderSurvey },
   { key: 'topics', label: '📚 學習主題庫', render: renderTopics },
   { key: 'history', label: '🗂️ 紀錄', render: renderHistory },
   { key: 'settings', label: '⚙️ 設定', render: renderSettings },
@@ -90,6 +92,21 @@ function renderAuth() {
   pw.addEventListener('keydown', e => { if (e.key === 'Enter') busy(() => ctx.store.signIn(email.value, pw.value)); });
 }
 
+// 超過保留天數的踏查、週會紀錄自動刪除（清容量）。學習主題庫不會刪。
+export const DEFAULT_RETENTION_DAYS = 7;
+async function autoCleanup() {
+  const days = ctx.settings.retentionDays ?? DEFAULT_RETENTION_DAYS;
+  if (!days || days <= 0) return;
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  let n = 0;
+  for (const col of ['trips', 'meetings']) {
+    for (const item of await ctx.store.list(col)) {
+      if ((item.createdAt || item.updatedAt || Date.now()) < cutoff) { await ctx.store.remove(col, item.id); n++; }
+    }
+  }
+  if (n) setTimeout(() => toast(`🧹 已自動清除 ${n} 筆超過 ${days} 天的紀錄`), 400);
+}
+
 async function main() {
   try {
     ctx.store = await createStore();
@@ -109,6 +126,7 @@ async function main() {
     );
     tabsEl.hidden = false;
     await ctx.reloadSettings();
+    await autoCleanup();
     ctx.go(ctx.settings.geminiKey ? 'trip' : 'settings');
   });
 }

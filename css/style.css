@@ -125,3 +125,8 @@ button.btn:disabled { opacity: .45; cursor: not-allowed; }
 details summary { cursor: pointer; color: var(--primary); font-weight: 600; margin: 6px 0; }
 pre.example { background: var(--bg); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 13px; white-space: pre-wrap; }
 .auth { max-width: 420px; margin: 24px auto; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; vertical-align: top; }
+table.grid th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.schedule { font-size: 15px; }
+.schedule strong { font-size: 18px; }

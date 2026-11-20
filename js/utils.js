@@ -231,3 +231,50 @@ export async function sha256(text) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
+
+// ---------- 每週發送時間 ----------
+
+/** 這週的發送時間（預設週二 17:00）。weekday：0=日 1=一 2=二 … */
+export function thisWeekSendTime(now = new Date(), weekday = 2, hhmm = '17:00') {
+  const [h, m] = hhmm.split(':').map(Number);
+  const d = new Date(now);
+  d.setHours(h || 0, m || 0, 0, 0);
+  d.setDate(d.getDate() + (weekday - d.getDay()));
+  return d;
+}
+
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+export function weekdayName(n) { return WEEKDAYS[n] ?? ''; }
+
+export function formatDateTime(d) {
+  return `${d.getMonth() + 1}/${d.getDate()}（${WEEKDAYS[d.getDay()]}）${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// ---------- 問卷檢查 ----------
+
+/** 名字比對用：去掉空白、全形轉半形、英文轉小寫 */
+export function normName(s) {
+  return String(s || '')
+    .replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/[\s　]/g, '')
+    .toLowerCase();
+}
+
+/** Google 表單的「時間戳記」轉成 Date，例如「2026/11/17 下午 8:05:12」 */
+export function parseFormTimestamp(s) {
+  const t = String(s || '').trim();
+  const m = t.match(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})\s*(上午|下午|AM|PM)?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let [, y, mo, d, ap1, hh, mm, ss, ap2] = m;
+  let h = Number(hh);
+  const ap = (ap1 || ap2 || '').toUpperCase();
+  if ((ap === '下午' || ap === 'PM') && h < 12) h += 12;
+  if ((ap === '上午' || ap === 'AM') && h === 12) h = 0;
+  return new Date(Number(y), Number(mo) - 1, Number(d), h, Number(mm), Number(ss || 0));
+}
+
+/** 把「8 / 10」「8/10」拆成 {got, total} */
+export function parseScore(s) {
+  const m = String(s || '').match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
+  return m ? { got: Number(m[1]), total: Number(m[2]) } : null;
+}
