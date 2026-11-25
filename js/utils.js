@@ -38,7 +38,7 @@ export function toROC(iso) {
   return `${y - 1911}/${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}`;
 }
 
-/** 問卷標題，例如「115/11/17 戶外踏查1-2年級問卷_高雄市立總圖書館」 */
+/** 問卷標題，例如「115/11/17 戶外踏查1-3年級問卷_台灣滷味博物館」 */
 export function surveyTitle(iso, gradeLabel, place) {
   return `${toROC(iso)} 戶外踏查${gradeLabel}問卷_${place || '（地點）'}`;
 }

@@ -5,9 +5,9 @@ import { el, toROC, weekKey, copyText } from '../utils.js';
 // 順序就是名單上的順序。title／note 是預設文字，可以在「⚙️ 設定 → 名單格式」改。
 export const PARTS = {
   missing: { title: '未填問卷', note: '補填問卷、抄未完成作業箴言3次/一年級1次', by: '主要老師（📊 問卷檢查）' },
-  perfect38t: { title: '大孩子老師出題全對', note: '5元心幣', by: '批改 3-8 年級的老師' },
-  perfect38s: { title: '大孩子自出題全對', note: '5元心幣', by: '批改 3-8 年級的老師' },
-  perfect12: { title: '小小孩全對', note: '10元心幣', by: '批改 1-2 年級的老師' },
+  perfect38t: { title: '大孩子老師出題全對', note: '5元心幣', by: '批改大孩子問卷的老師' },
+  perfect38s: { title: '大孩子自出題全對', note: '5元心幣', by: '批改大孩子問卷的老師' },
+  perfect12: { title: '小小孩全對', note: '10元心幣', by: '批改小小孩問卷的老師' },
 };
 
 /** 合併老師在設定裡改過的標題和獎勵文字 */

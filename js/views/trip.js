@@ -22,7 +22,7 @@ function newState() {
     docs: [],              // 只放在記憶體：PDF／圖片檔的行程表、學習單
     photos: [],            // 只放在記憶體：縮小後的照片
     consent: false,
-    survey: { g12: '', g38: '' },
+    survey: { g12: '', g38: '', smallRange: '1-3', bigRange: '4-6' }, // g12＝小小孩連結、g38＝大孩子連結
     photoNotes: [],        // [{seen, highlights, uncertain, privacy}]
     notesConfirmed: false,
     outputs: { line: true, survey: true, fb: true, ig: true, record: true, lineQuestions: false },
@@ -38,18 +38,18 @@ export function assembleTexts(S, r) {
   const texts = {};
   const qs = (r.home_questions || []).slice(0, 2);
   if (S.outputs.line) {
-    const parts = [`【戶外踏查】${r.line_title}`.trim(), '', r.line_body.trim()];
+    const parts = ['【戶外踏查】', String(r.line_title || '').replace(/^【戶外踏查】\s*/, '').trim(), '', r.line_body.trim()];
     if (S.outputs.lineQuestions && qs.length) parts.push('', '💬 回家可以問問孩子：', ...qs.map(q => `・${q}`));
-    if (S.survey.g12) parts.push('', '1-2年級問卷：', S.survey.g12);
-    if (S.survey.g38) parts.push('', '3-8年級問卷：', S.survey.g38);
-    if (S.survey.g12 || S.survey.g38) parts.push('', '✨請提醒孩子們今天晚上12點前要送出問卷喔！');
+    if (S.survey.g12) parts.push('', `小小孩問卷（${S.survey.smallRange}年級）：`, S.survey.g12);
+    if (S.survey.g38) parts.push('', `大孩子問卷（${S.survey.bigRange}年級）：`, S.survey.g38);
+    if (S.survey.g12 || S.survey.g38) parts.push('', '✨✨請提醒孩子們今天晚上12點前要送出問卷喔！');
     texts.line = parts.join('\n');
   }
   if (S.outputs.survey) {
     texts.survey = [
       '📋 問卷標題（複製到 Google 表單）',
-      `1-2年級：${surveyTitle(S.date, '1-2年級', S.place)}`,
-      `3-8年級：${surveyTitle(S.date, '3-8年級', S.place)}`,
+      `小小孩：${surveyTitle(S.date, `${S.survey.smallRange}年級`, S.place)}`,
+      `大孩子：${surveyTitle(S.date, `${S.survey.bigRange}年級`, S.place)}`,
       '',
       '💬 建議放進問卷的題目（回家可以問孩子的問題）：',
       ...(qs.length ? qs.map((q, i) => `${i + 1}. ${q}`) : ['（AI 沒有產生題目，請老師自行補上）']),
@@ -90,6 +90,12 @@ export async function renderTrip(root, ctx) {
     ctx.params = null;
   }
   const settings = ctx.settings || {};
+  // 新的一次：小小孩／大孩子的年級範圍沿用上一次
+  if (!S.id && !S.texts?.line) {
+    const last = (await store.list('trips'))[0];
+    if (last?.survey?.smallRange) S.survey.smallRange = last.survey.smallRange;
+    if (last?.survey?.bigRange) S.survey.bigRange = last.survey.bigRange;
+  }
   let namesForCheck = '';      // 老師臨時輸入的學生名字：只放在記憶體，不儲存
   const getNames = () => namesForCheck.split(/[\s,，、]+/).filter(Boolean);
 
@@ -245,11 +251,17 @@ export async function renderTrip(root, ctx) {
   const g38 = el('input', { type: 'url', value: S.survey.g38, placeholder: 'https://forms.gle/…' });
   g12.addEventListener('input', () => { S.survey.g12 = g12.value.trim(); });
   g38.addEventListener('input', () => { S.survey.g38 = g38.value.trim(); });
+  if (!S.survey.smallRange) S.survey.smallRange = '1-3';
+  if (!S.survey.bigRange) S.survey.bigRange = '4-6';
+  const smallRange = el('input', { type: 'text', value: S.survey.smallRange, placeholder: '例如：1-3', style: 'max-width:140px' });
+  const bigRange = el('input', { type: 'text', value: S.survey.bigRange, placeholder: '例如：4-6', style: 'max-width:140px' });
+  smallRange.addEventListener('input', () => { S.survey.smallRange = smallRange.value.trim().replace(/年級$/, ''); drawSurveyTitles(); });
+  bigRange.addEventListener('input', () => { S.survey.bigRange = bigRange.value.trim().replace(/年級$/, ''); drawSurveyTitles(); });
   const titlesBox = el('div');
   function drawSurveyTitles() {
     titlesBox.replaceChildren(
       el('div', { class: 'muted' }, '建議的問卷標題（產生文案後，在「問卷題目」區塊可以一起複製）：'),
-      el('div', { class: 'bubble' }, `${surveyTitle(S.date, '1-2年級', S.place)}\n${surveyTitle(S.date, '3-8年級', S.place)}`),
+      el('div', { class: 'bubble' }, `${surveyTitle(S.date, `${S.survey.smallRange}年級`, S.place)}\n${surveyTitle(S.date, `${S.survey.bigRange}年級`, S.place)}`),
     );
   }
 
@@ -396,8 +408,12 @@ export async function renderTrip(root, ctx) {
     el('div', { class: 'card' },
       el('h2', {}, el('span', { class: 'step-num' }, '4'), '問卷連結'),
       el('p', { class: 'muted' }, '每週新的 Google 表單連結貼在這裡。沒有問卷就留空，家長訊息就不會出現問卷那一段。'),
-      el('label', {}, '1-2年級問卷'), g12,
-      el('label', {}, '3-8年級問卷'), g38,
+      el('div', { class: 'row' },
+        el('div', {}, el('label', {}, '小小孩是幾年級？'), smallRange),
+        el('div', {}, el('label', {}, '大孩子是幾年級？'), bigRange),
+      ),
+      el('label', {}, '小小孩問卷連結'), g12,
+      el('label', {}, '大孩子問卷連結'), g38,
       titlesBox,
     ),
     step6Card,

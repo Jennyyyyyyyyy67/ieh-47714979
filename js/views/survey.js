@@ -8,8 +8,8 @@ import { saveReportPart } from './report.js';
 
 export const ROLES = {
   main: { label: '🚌 踏查、週會、發送', desc: '寫文案、發送，並確認全校有沒有交問卷', grade: '' },
-  g12: { label: '📝 批改 1-2 年級問卷', desc: '用 AI 檢查 1-2 年級學生有沒有答對', grade: '1-2年級' },
-  g38: { label: '📝 批改 3-8 年級問卷', desc: '用 AI 檢查 3-8 年級學生有沒有答對', grade: '3-8年級' },
+  g12: { label: '📝 批改小小孩問卷', desc: '用 AI 檢查小小孩（低年級）有沒有答對', grade: '小小孩' },
+  g38: { label: '📝 批改大孩子問卷', desc: '用 AI 檢查大孩子（老師出題、自出題）有沒有答對', grade: '大孩子' },
 };
 const VERDICT_ICON = { '對': '✅', '部分對': '🟡', '錯': '❌', '無法判斷': '❓', '未作答': '⬜' };
 const VERDICT_CYCLE = ['對', '部分對', '錯'];
@@ -32,7 +32,15 @@ export function allRight(r, cols) {
   return cs.length > 0 && cs.every(c => r.marks[c].verdict === '對');
 }
 
-const guessBand = (name) => (/1\s*[-~～－]\s*2/.test(name) ? '1-2年級' : /3\s*[-~～－]\s*8/.test(name) ? '3-8年級' : '');
+/** 從檔名猜是哪一份：有「小小孩／大孩子」最準；不然看年級範圍，從 1 年級開始的是小小孩 */
+const guessBand = (name) => {
+  if (/小小孩|低年級/.test(name)) return '小小孩';
+  if (/大孩子|中高年級|高年級/.test(name)) return '大孩子';
+  const m = name.match(/(\d+)\s*[-~～－]\s*(\d+)/);
+  if (m) return Number(m[1]) <= 1 ? '小小孩' : '大孩子';
+  return '';
+};
+const bandForAI = (b) => (b === '小小孩' ? '小小孩（低年級）' : b === '大孩子' ? '大孩子（中高年級）' : '');
 
 const S = { roster: '', deadlineDate: '', deadlineTime: '23:59', files: [] };
 /** 切換工作或登出時清空（下一位老師不會看到上一位上傳的回覆） */
@@ -331,7 +339,7 @@ export async function renderSurvey(root, ctx) {
           el('option', { value: 'self', selected: kindOf(f, i) === 'self' }, '🧒 學生自出題'));
         kindSel.addEventListener('change', () => { f.qkind = { ...(f.qkind || {}), [i]: kindSel.value }; delete (f.ai || {})[i]; draw(); });
         return el('div', {}, el('label', {}, `${qLabel(n)} ${f.headers[i]}`), inp,
-          f.band === '3-8年級' ? kindSel : null,
+          f.band === '大孩子' ? kindSel : null,
           el('label', { class: 'inline' }, skip, el('span', { class: 'muted' }, '這題不批改（例如：感想、心得）')),
           el('datalist', { id: listId }, ...answers.map(a => el('option', { value: a }))));
       });
@@ -344,7 +352,7 @@ export async function renderSurvey(root, ctx) {
         const done = spinnerButton(aiBtn, 'AI 批改中…');
         try {
           await aiGradeFile(f, {
-            apiKey: ctx.settings.geminiKey, model: ctx.settings.model, gradeBand: band || (f.name.match(/\d-\d年級/) || [''])[0],
+            apiKey: ctx.settings.geminiKey, model: ctx.settings.model, gradeBand: bandForAI(f.band || band),
             onProgress: (d, t) => { aiBtn.lastChild.textContent = ` AI 批改中…（${d}/${t}）`; },
           });
           f.overrides = {};
@@ -367,7 +375,7 @@ export async function renderSurvey(root, ctx) {
         `需要再教的題目：${perQ.filter(q => q.n && q.ok / q.n < 0.6).map(q => qLabel(qIndex.get(q.col))).join('、') || '無'}`,
         `答對不到六成的學生（${needHelp.length}）：${needHelp.map(r => r.name).join('、') || '無'}`,
       ].join('\n');
-      const isBig = f.band === '3-8年級';
+      const isBig = f.band === '大孩子';
       const qCols = gradedCols(f);
       const tCols = qCols.filter(c => kindOf(f, c) === 'teacher');
       const sCols = qCols.filter(c => kindOf(f, c) === 'self');
@@ -376,11 +384,11 @@ export async function renderSurvey(root, ctx) {
       const perfectSelf = isBig ? results.filter(r => allRight(r, sCols)) : [];
       const bandSel = el('select', {},
         el('option', { value: '' }, '（請選）'),
-        el('option', { value: '1-2年級', selected: f.band === '1-2年級' }, '1-2年級'),
-        el('option', { value: '3-8年級', selected: f.band === '3-8年級' }, '3-8年級'));
+        el('option', { value: '小小孩', selected: f.band === '小小孩' }, '小小孩'),
+        el('option', { value: '大孩子', selected: f.band === '大孩子' }, '大孩子'));
       bandSel.addEventListener('change', () => { f.band = bandSel.value; draw(); });
       const savePerfect = el('button', { class: 'btn primary', onclick: async () => {
-        if (!f.band) { ctx.toast('請先選這份是幾年級的問卷'); return; }
+        if (!f.band) { ctx.toast('請先選這份是小小孩還是大孩子的問卷'); return; }
         if (!results.some(r => r.total || r.formScore)) { ctx.toast('還沒批改：請先按「🤖 用 AI 批改」或填正確答案'); return; }
         const groupOf = new Map(list.map(st => [st.key, st.group]));
         const toNames = rs => rs.map(r => ({ name: r.name, group: groupOf.get(r.key) || '' }));
@@ -443,7 +451,7 @@ export async function renderSurvey(root, ctx) {
           el('p', {}, perfect.map(r => r.name).join('、') || '（目前沒有）'),
           isBig ? el('h3', {}, `⭐ 自出題全對（${perfectSelf.length} 人）`) : null,
           isBig ? el('p', {}, sCols.length ? (perfectSelf.map(r => r.name).join('、') || '（目前沒有）') : '（還沒設定哪一題是「學生自出題」：到上面「設定正確答案」裡選）') : null,
-          el('div', { class: 'row' }, el('div', {}, el('label', {}, '這份是幾年級的問卷？'), bandSel)),
+          el('div', { class: 'row' }, el('div', {}, el('label', {}, '這份是誰的問卷？'), bandSel)),
           el('div', { class: 'btns' }, savePerfect, el('button', { class: 'btn', onclick: () => ctx.go('report') }, '📋 看本週名單')),
         ),
       );
@@ -471,7 +479,7 @@ export async function renderSurvey(root, ctx) {
   }
 
   root.replaceChildren(...[
-    el('h1', {}, isMain ? '📊 問卷檢查（全校）' : `📝 ${band}答案批改`),
+    el('h1', {}, isMain ? '📊 問卷檢查（全校）' : `📝 ${band}問卷答案批改`),
     !isMain && !ctx.settings?.geminiKey ? el('div', { class: 'notice danger' }, '這個帳號還沒設定 AI 鑰匙。請先切換到「踏查、週會、發送」工作，到「⚙️ 設定」貼上 Gemini 鑰匙。') : null,
     el('div', { class: 'notice ok' }, isMain
       ? '🔒 問卷回覆只在這個畫面裡處理，不會被儲存。用 AI 批改時只送代號和答案，不送名字。名單只有在你按「記住這份名單」時，才會存在你自己的帳號裡。'
@@ -481,7 +489,7 @@ export async function renderSurvey(root, ctx) {
       el('ol', { class: 'muted' },
         el('li', {}, '打開 Google 表單 → 上面的「回覆」分頁。'),
         el('li', {}, '按右上角「⋮」→「下載回覆（.csv）」。如果是連到試算表，就在試算表按「檔案 → 下載 → 逗號分隔值（.csv）」。'),
-        isMain ? el('li', {}, '1-2 年級和 3-8 年級兩份都下載，一起上傳。') : el('li', {}, `只要下載 ${band}那一份。`),
+        isMain ? el('li', {}, '小小孩和大孩子兩份都下載，一起上傳。') : el('li', {}, `只要下載${band}那一份。`),
       ),
       el('div', { class: 'btns' }, el('button', { class: 'btn primary', onclick: () => fileInput.click() }, '📂 上傳回覆（CSV 或 Excel）'), fileInput),
     ),

@@ -176,7 +176,7 @@ await step('踏查：問卷連結＋自動問卷標題', async () => {
   await page.fill('input[type=url] >> nth=0', 'https://forms.gle/AAA');
   await page.fill('input[type=url] >> nth=1', 'https://forms.gle/BBB');
   const titles = await page.textContent('.bubble');
-  assert.ok(/戶外踏查1-2年級問卷_高雄市立圖書館總館/.test(titles));
+  assert.ok(/戶外踏查1-3年級問卷_高雄市立圖書館總館/.test(titles));
   assert.ok(/^\d{3}\/\d{2}\/\d{2} /.test(titles), '民國日期格式');
 });
 
@@ -192,16 +192,16 @@ const outText = async (title) => page.locator('.output-block', { hasText: title 
 
 await step('LINE 版：照範本格式、附問卷連結和 12 點提醒', async () => {
   const t = await outText('家長群組溫馨回顧');
-  assert.ok(t.startsWith('【戶外踏查】城市裡的知識座標'));
-  assert.ok(t.includes('1-2年級問卷：\nhttps://forms.gle/AAA'));
-  assert.ok(t.includes('3-8年級問卷：\nhttps://forms.gle/BBB'));
-  assert.ok(t.trim().endsWith('✨請提醒孩子們今天晚上12點前要送出問卷喔！'));
+  assert.ok(t.startsWith('【戶外踏查】\n城市裡的知識座標'), t);
+  assert.ok(t.includes('小小孩問卷（1-3年級）：\nhttps://forms.gle/AAA'), t);
+  assert.ok(t.includes('大孩子問卷（4-6年級）：\nhttps://forms.gle/BBB'), t);
+  assert.ok(t.trim().endsWith('✨✨請提醒孩子們今天晚上12點前要送出問卷喔！'));
   assert.ok(!t.includes('回家可以問問孩子'), '預設回家問題不放 LINE');
 });
 
 await step('問卷區塊：有標題和回家可以問孩子的問題', async () => {
   const t = await outText('問卷標題＋題目');
-  assert.ok(t.includes('戶外踏查3-8年級問卷_高雄市立圖書館總館'));
+  assert.ok(t.includes('戶外踏查4-6年級問卷_高雄市立圖書館總館'));
   assert.ok(t.includes('1. 你今天用什麼方法找到想看的書？'));
 });
 
@@ -415,10 +415,10 @@ await step('模型下架：產生文案時自動改用 Google 建議的新模型
 
 await step('共用帳號：按「切換工作」改成批改 1-2 年級，只看到答案批改', async () => {
   await page.click('text=🔄 切換工作');
-  await pickRole(page, '批改 1-2 年級問卷');
-  await page.waitForSelector('h1:has-text("📝 1-2年級答案批改")');
+  await pickRole(page, '批改小小孩問卷');
+  await page.waitForSelector('h1:has-text("📝 小小孩問卷答案批改")');
   assert.deepEqual(await page.locator('.tabs button').allTextContents(), ['📝 答案批改', '📋 本週名單']);
-  assert.ok(await page.isVisible('#who >> text=批改 1-2 年級問卷'));
+  assert.ok(await page.isVisible('#who >> text=批改小小孩問卷'));
   assert.ok(!(await page.isVisible('text=還沒設定 AI 鑰匙')), '同一個帳號，鑰匙已經有了');
 });
 
@@ -431,14 +431,14 @@ await step('共用帳號：同一台電腦開新分頁，不用再登入，但�
 });
 
 await step('批改老師：AI 批改簡答題（不送學生名字）、可略過感想題、可點符號改判', async () => {
-  await page.waitForSelector('h1:has-text("📝 1-2年級答案批改")');
+  await page.waitForSelector('h1:has-text("📝 小小孩問卷答案批改")');
   assert.ok(!(await page.isVisible('text=學生名單（用來找出誰沒交）')), '批改老師不用貼名單');
   assert.ok(!(await page.textContent('main')).includes('null'), '畫面不能出現 null');
   const csv = '時間戳記,你的名字,圖書館的書是怎麼排的？,今天最喜歡什麼？\n'
     + '2026/11/17 下午 5:05:00,小美同學,用分類號排,看繪本\n'
     + '2026/11/17 下午 5:06:00,小明同學,依顏色排,交換書\n'
     + '2026/11/17 下午 5:07:00,小華同學,照大小,看繪本\n';
-  await page.setInputFiles('input[type=file][accept*=csv]', { name: '1-2年級問卷.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await page.setInputFiles('input[type=file][accept*=csv]', { name: '小小孩問卷（1-3年級）.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
   await page.waitForSelector('text=共 3 筆回覆');
   // 沒有表單分數時，「設定正確答案」本來就是打開的
   assert.ok(await page.isVisible('label:has-text("這題不批改") >> nth=1'));
@@ -451,7 +451,7 @@ await step('批改老師：AI 批改簡答題（不送學生名字）、可略�
   assert.equal(calls.length, 1, '只批改沒被略過的那一題');
   assert.ok(calls[0].text.includes('S1：用分類號排'));
   assert.ok(!/小美|小明|小華/.test(calls[0].text), 'AI 不能看到學生名字');
-  assert.ok(calls[0].text.includes('1-2年級'));
+  assert.ok(calls[0].text.includes('小小孩（低年級）'));
   assert.equal(calls[0].key, 'FAKE-KEY-123', '用的是共用帳號的鑰匙');
   const row = name => page.locator('tr', { hasText: name });
   assert.ok((await row('小美同學').textContent()).includes('①✅'));
@@ -470,18 +470,18 @@ await step('批改老師：AI 批改簡答題（不送學生名字）、可略�
 
 await step('本週名單：1-2年級老師存全對名單', async () => {
   await page.waitForSelector('text=⭐ 全對的學生（2 人）');
-  assert.equal(await page.inputValue('select >> nth=-1'), '1-2年級', '從檔名自動判斷年級');
+  assert.equal(await page.inputValue('select >> nth=-1'), '小小孩', '從檔名自動判斷是小小孩');
   await page.click('text=💾 把全對名單存進本週名單');
   await page.waitForSelector('text=已存進本週名單：小小孩全對 2 人');
 });
 
 await step('本週名單：切換成 3-8年級老師，上一位的檔案不見了；批改後存全對名單', async () => {
   await page.click('text=🔄 切換工作');
-  await pickRole(page, '批改 3-8 年級問卷');
-  await page.waitForSelector('h1:has-text("📝 3-8年級答案批改")');
+  await pickRole(page, '批改大孩子問卷');
+  await page.waitForSelector('h1:has-text("📝 大孩子問卷答案批改")');
   assert.ok(!(await page.isVisible('text=小美同學')), '切換工作後不能看到上一位老師的回覆');
   const csv = '時間戳記,你的名字,書怎麼排？,請自己出一題並回答\n2026/11/17 下午 6:00:00,大明同學,用分類號,不知道\n2026/11/17 下午 6:01:00,大華同學,依顏色,問：書用什麼排？答：分類號\n';
-  await page.setInputFiles('input[type=file][accept*=csv]', { name: '3-8年級問卷.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await page.setInputFiles('input[type=file][accept*=csv]', { name: '大孩子問卷（4-6年級）.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
   // 「請自己出一題並回答」會自動被判斷成「學生自出題」
   assert.equal(await page.inputValue('select:has(option[value=self]) >> nth=1'), 'self');
   const before = geminiCalls.length;
