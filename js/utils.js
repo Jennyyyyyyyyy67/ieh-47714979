@@ -278,3 +278,33 @@ export function parseScore(s) {
   const m = String(s || '').match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
   return m ? { got: Number(m[1]), total: Number(m[2]) } : null;
 }
+
+// ---------- 邀請連結（分享 AI 鑰匙給批改老師） ----------
+// 放在網址 # 後面：這部分不會被送到任何伺服器，只有打開連結的瀏覽器看得到。
+
+function toB64Url(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  bytes.forEach(b => { bin += String.fromCharCode(b); });
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function fromB64Url(s) {
+  const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+  return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+}
+
+/** 產生邀請連結：{ key, model, role } */
+export function makeInviteLink(baseUrl, { key, model, role }) {
+  return `${baseUrl.split('#')[0]}#invite=${toB64Url(JSON.stringify({ k: key, m: model, r: role }))}`;
+}
+
+/** 從網址讀出邀請內容，讀不懂就回傳 null */
+export function readInvite(hash) {
+  const m = String(hash || '').match(/invite=([\w-]+)/);
+  if (!m) return null;
+  try {
+    const o = JSON.parse(fromB64Url(m[1]));
+    if (!o.k) return null;
+    return { key: String(o.k), model: o.m ? String(o.m) : '', role: ['g12', 'g38', 'main'].includes(o.r) ? o.r : '' };
+  } catch { return null; }
+}

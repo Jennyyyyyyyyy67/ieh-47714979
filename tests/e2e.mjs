@@ -410,6 +410,38 @@ await step('模型下架：產生文案時自動改用 Google 建議的新模型
   assert.equal(await page.inputValue('input[list=modelList]'), 'gemini-3.8-flash');
 });
 
+await step('邀請連結：主要老師產生邀請，批改老師點連結註冊後自動設定好鑰匙和身分', async () => {
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.click('text=📩 邀請 3-8年級批改老師');
+  await page.waitForSelector('text=已複製「3-8年級批改老師」的邀請訊息');
+  const msg = await page.evaluate(() => navigator.clipboard.readText());
+  const link = msg.match(/https?:\/\/\S+#invite=[\w-]+/)[0];
+  assert.ok(!link.includes('FAKE-KEY-123'), '鑰匙不能直接以明文出現在連結裡');
+  const ctx2 = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  const p2 = await ctx2.newPage();
+  p2.on('pageerror', e => pageErrors.push(e.message));
+  await mockGemini(p2);
+  await p2.goto(link);
+  await p2.waitForSelector('text=你是被邀請來的');
+  assert.ok(!p2.url().includes('invite='), '網址上的邀請碼要被拿掉');
+  await p2.fill('input[type=email]', 'invited38@example.com');
+  await p2.fill('input[type=password]', 'secret777');
+  await p2.click('button:has-text("第一次使用：註冊")');
+  await p2.waitForSelector('h1:has-text("📝 3-8年級答案批改")');
+  assert.ok(!(await p2.isVisible('text=你是哪一位老師？')), '被邀請的不用再選身分');
+  assert.deepEqual(await p2.locator('.tabs button').allTextContents(), ['📝 答案批改', '⚙️ 設定']);
+  const before = geminiCalls.length;
+  await p2.setInputFiles('input[type=file][accept*=csv]', { name: '3-8年級.csv', mimeType: 'text/csv', buffer: Buffer.from('時間戳記,你的名字,書怎麼排？\n2026/11/17 下午 5:05:00,測試生,用分類號\n') });
+  await p2.click('button:has-text("🤖 用 AI 批改")');
+  await p2.waitForSelector('text=AI 批改完成');
+  assert.equal(geminiCalls[before].key, 'FAKE-KEY-123', '用的是主要老師的鑰匙');
+  assert.ok(geminiCalls[before].text.includes('3-8年級'));
+  await p2.click('.tabs >> text=⚙️ 設定');
+  await p2.waitForSelector('text=主要老師已經幫你設定好了');
+  assert.ok(!(await p2.isVisible('input[placeholder*="AI Studio"]')), '批改老師不用看到鑰匙欄位');
+  await ctx2.close();
+});
+
 await step('批改老師：註冊時選「1-2年級批改老師」，只看到答案批改和設定', async () => {
   await page.click('text=登出');
   await page.fill('input[type=email]', 'grader12@example.com');

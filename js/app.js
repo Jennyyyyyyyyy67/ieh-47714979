@@ -1,6 +1,6 @@
 // 主程式：登入、分頁切換
 import { createStore } from './store.js';
-import { el } from './utils.js';
+import { el, readInvite } from './utils.js';
 import { setModelUpgradeHandler } from './gemini.js';
 import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
@@ -67,6 +67,7 @@ function renderTabs() {
 function renderAuth() {
   tabsEl.hidden = true;
   whoEl.replaceChildren();
+  const invited = ctx.pendingInvite || (() => { try { return sessionStorage.getItem('tripapp:invite'); } catch { return null; } })();
   const email = el('input', { type: 'email', autocomplete: 'username', placeholder: 'teacher@example.com' });
   const pw = el('input', { type: 'password', autocomplete: 'current-password', placeholder: '至少 6 個字' });
   const msg = el('div');
@@ -78,6 +79,7 @@ function renderAuth() {
   app.replaceChildren(el('div', { class: 'card auth' },
     el('h1', {}, '老師登入'),
     el('p', { class: 'muted' }, '每位老師的資料分開存放，只有自己看得到。'),
+    invited ? el('div', { class: 'notice ok' }, '📩 你是被邀請來的！第一次來請輸入 Email 和密碼，按「第一次使用：註冊」。AI 鑰匙和身分會自動設定好。') : null,
     el('label', {}, 'Email'), email,
     el('label', {}, '密碼'), pw,
     msg,
@@ -129,7 +131,28 @@ export function renderRolePicker(onDone) {
 }
 ctx.pickRole = () => renderRolePicker(() => ctx.go(ctx.settings.geminiKey ? (myRole() === 'main' ? 'trip' : 'survey') : 'settings'));
 
+// 邀請連結：先記下來並從網址上拿掉（避免被截圖或分享出去），登入後再套用
+function captureInvite() {
+  const inv = readInvite(location.hash);
+  if (!inv) return;
+  try { sessionStorage.setItem('tripapp:invite', JSON.stringify(inv)); } catch { /* 無痕模式也沒關係 */ }
+  ctx.pendingInvite = inv;
+  history.replaceState(null, '', location.pathname + location.search);
+}
+async function applyInvite() {
+  let inv = ctx.pendingInvite;
+  if (!inv) { try { inv = JSON.parse(sessionStorage.getItem('tripapp:invite') || 'null'); } catch { inv = null; } }
+  if (!inv) return false;
+  ctx.settings = { ...ctx.settings, geminiKey: inv.key, model: inv.model || ctx.settings.model, role: inv.role || ctx.settings.role, sharedKey: true };
+  await ctx.store.saveSettings(ctx.settings);
+  ctx.pendingInvite = null;
+  try { sessionStorage.removeItem('tripapp:invite'); } catch { /* ignore */ }
+  setTimeout(() => toast('🎉 已經幫你設定好 AI 鑰匙和身分，可以直接開始了'), 300);
+  return true;
+}
+
 async function main() {
+  captureInvite();
   try {
     ctx.store = await createStore();
   } catch (e) {
@@ -148,6 +171,7 @@ async function main() {
     );
     tabsEl.hidden = false;
     await ctx.reloadSettings();
+    await applyInvite();
     setModelUpgradeHandler(async (model) => {
       ctx.settings = { ...ctx.settings, model };
       await ctx.store.saveSettings(ctx.settings);

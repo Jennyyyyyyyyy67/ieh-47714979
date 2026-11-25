@@ -1,5 +1,5 @@
 // ⚙️ 設定：Gemini 鑰匙、模型、預設分享老師
-import { el } from '../utils.js';
+import { el, makeInviteLink, copyText } from '../utils.js';
 import { listModels, DEFAULT_MODEL, pickBestFlash } from '../gemini.js';
 import { spinnerButton } from './common.js';
 import { ROLES } from './survey.js';
@@ -45,6 +45,25 @@ export async function renderSettings(root, ctx) {
     toast('設定已儲存');
   });
 
+  function inviteCard() {
+    const out = el('div');
+    const mk = (role, label) => el('button', { class: 'btn', onclick: async () => {
+      if (!ctx.settings?.geminiKey) { out.replaceChildren(el('div', { class: 'notice danger' }, '請先在上面設定好你的 Gemini 鑰匙，並按「儲存設定」。')); return; }
+      const link = makeInviteLink(location.href, { key: ctx.settings.geminiKey, model: ctx.settings.model, role });
+      const msgText = `老師好！請幫忙批改${label}問卷 🙏\n1. 點這個連結：${link}\n2. 輸入你的 Email 和密碼，按「第一次使用：註冊」\n3. 系統會自動設定好，直接上傳問卷回覆、按「🤖 用 AI 批改」就可以了\n（這個連結請不要轉傳給別人）`;
+      const ok = await copyText(msgText);
+      out.replaceChildren(el('div', { class: ok ? 'notice ok' : 'notice warn' }, ok ? `✅ 已複製「${label}批改老師」的邀請訊息，可以直接貼到 LINE 私訊給那位老師。` : '複製失敗，請手動選取下面的文字。'),
+        el('div', { class: 'bubble' }, msgText));
+    } }, `📩 邀請 ${label}批改老師`);
+    return el('div', { class: 'card' },
+      el('h2', {}, '🔗 邀請批改老師'),
+      el('p', { class: 'muted' }, '按下去會複製一段邀請訊息。批改老師點連結、註冊，就會自動用你的 AI 鑰匙，不用自己申請。'),
+      el('div', { class: 'notice warn' }, '⚠️ 連結裡面藏著你的鑰匙：只私訊給那位老師，不要貼到群組。萬一傳錯了，到 Google AI Studio 把這把鑰匙刪掉、建立新的，再重新邀請一次就好。三位老師共用同一把鑰匙的免費額度。'),
+      el('div', { class: 'btns' }, mk('g12', '1-2年級'), mk('g38', '3-8年級')),
+      out,
+    );
+  }
+
   root.replaceChildren(...[
     modelList,
     el('h1', {}, '⚙️ 設定'),
@@ -53,9 +72,13 @@ export async function renderSettings(root, ctx) {
       el('p', {}, el('strong', {}, ROLES[s.role || 'main'].label), el('span', { class: 'muted' }, `　${ROLES[s.role || 'main'].desc}`)),
       el('div', { class: 'btns', style: 'margin-top:0' }, el('button', { class: 'btn small', onclick: () => ctx.pickRole() }, '換身分')),
     ),
-    el('div', { class: 'card' },
+    !isMain && s.sharedKey && s.geminiKey ? el('div', { class: 'card' },
+      el('h2', {}, '🤖 AI 鑰匙'),
+      el('div', { class: 'notice ok' }, '✅ 主要老師已經幫你設定好了，不用自己申請。直接到「📝 答案批改」開始吧！'),
+    ) : null,
+    !isMain && s.sharedKey && s.geminiKey ? null : el('div', { class: 'card' },
       el('h2', {}, isMain ? '🤖 Gemini（看照片、寫文案、批改的 AI）' : '🤖 Gemini（批改答案的 AI）'),
-      isMain ? null : el('p', {}, '每位老師用自己的免費鑰匙，大約 2 分鐘就能申請好。'),
+      isMain ? null : el('p', {}, '最簡單的方法：請主要老師在他的「⚙️ 設定」按「邀請批改老師」，把連結傳給你。'),
       el('ol', { class: 'muted' },
         el('li', {}, '用 Google 帳號打開 ', el('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'Google AI Studio'), '。'),
         el('li', {}, '按「Create API key（建立 API 金鑰）」，複製那串英文數字。'),
@@ -69,6 +92,7 @@ export async function renderSettings(root, ctx) {
       msg,
       el('div', { class: 'btns' }, testBtn),
     ),
+    !isMain ? null : inviteCard(),
     !isMain ? null : el('div', { class: 'card' },
       el('h2', {}, '⛪ 週會'),
       el('label', {}, '預設分享的老師'), speaker,
