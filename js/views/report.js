@@ -1,12 +1,24 @@
-// 📋 本週名單：把三位老師的工作合在一起 —— 未填問卷、1-2年級全對、3-8年級全對
+// 📋 本週名單：把三位老師的工作合在一起 —— 未填問卷、大孩子老師出題全對、大孩子自出題全對、小小孩全對
 // 有學生名字，存在共用帳號裡，跟踏查紀錄一樣，超過保留天數會自動刪除。
 import { el, toROC, weekKey, copyText } from '../utils.js';
 
+// 順序就是名單上的順序。title／note 是預設文字，可以在「⚙️ 設定 → 名單格式」改。
 export const PARTS = {
-  missing: { title: '📝 未填問卷', by: '主要老師（📊 問卷檢查）' },
-  perfect12: { title: '⭐ 1-2年級全對', by: '批改 1-2 年級的老師' },
-  perfect38: { title: '⭐ 3-8年級全對', by: '批改 3-8 年級的老師' },
+  missing: { title: '未填問卷', note: '補填問卷、抄未完成作業箴言3次/一年級1次', by: '主要老師（📊 問卷檢查）' },
+  perfect38t: { title: '大孩子老師出題全對', note: '5元心幣', by: '批改 3-8 年級的老師' },
+  perfect38s: { title: '大孩子自出題全對', note: '5元心幣', by: '批改 3-8 年級的老師' },
+  perfect12: { title: '小小孩全對', note: '10元心幣', by: '批改 1-2 年級的老師' },
 };
+
+/** 合併老師在設定裡改過的標題和獎勵文字 */
+export function partLabels(settings) {
+  const custom = settings?.reportLabels || {};
+  return Object.fromEntries(Object.entries(PARTS).map(([k, p]) => [k, {
+    ...p,
+    title: (custom[k]?.title || '').trim() || p.title,
+    note: custom[k]?.note !== undefined ? custom[k].note.trim() : p.note,
+  }]));
+}
 
 /**
  * 把某一部分存進那一週的名單。names：[{name, group}]
@@ -22,6 +34,7 @@ export async function saveReportPart(ctx, dateISO, part, names) {
 function byWeek(items) {
   const weeks = {};
   for (const it of items) {
+    if (it.part === 'perfect38') it.part = 'perfect38t'; // 舊版的「3-8年級全對」
     if (!it.week || !PARTS[it.part]) continue;
     const w = (weeks[it.week] = weeks[it.week] || { id: it.week, week: it.week, ids: [] });
     w[it.part] = { names: it.names || [], savedAt: it.savedAt };
@@ -36,18 +49,18 @@ function groupByClass(names) {
   return g;
 }
 
-export function reportText(r) {
-  const lines = [`【${toROC(r.week)} 這週的問卷名單】`];
-  for (const [key, p] of Object.entries(PARTS)) {
+export function reportText(r, labels = partLabels()) {
+  const lines = [`【${toROC(r.week)} 問卷名單】`];
+  for (const [key, p] of Object.entries(labels)) {
     const part = r[key];
     lines.push('');
-    if (!part) { lines.push(`${p.title}：（還沒完成）`); continue; }
-    lines.push(`${p.title}（${part.names.length} 人）`);
-    if (!part.names.length) { lines.push('・無'); continue; }
+    lines.push(`${p.title}：${p.note ? `（${p.note}）` : ''}`);
+    if (!part) { lines.push('（還沒完成）'); continue; }
+    if (!part.names.length) { lines.push('（無）'); continue; }
     if (key === 'missing') {
-      for (const [g, ns] of Object.entries(groupByClass(part.names))) lines.push(`・${g}：${ns.join('、')}`);
+      for (const [g, ns] of Object.entries(groupByClass(part.names))) lines.push(`${g}：${ns.join('、')}`);
     } else {
-      lines.push(`・${part.names.map(n => n.name).join('、')}`);
+      lines.push(part.names.map(n => n.name).join('、'));
     }
   }
   return lines.join('\n');
@@ -68,17 +81,18 @@ export async function renderReport(root, ctx) {
       body.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'muted' }, '這週還沒有人存名單。每位老師做完自己的工作後，在「問卷檢查／答案批改」按「💾 存進本週名單」，這裡就會出現。')));
       return;
     }
-    const text = reportText(current);
-    const waiting = Object.entries(PARTS).filter(([k]) => !current[k]);
+    const labels = partLabels(ctx.settings);
+    const text = reportText(current, labels);
+    const waiting = Object.entries(labels).filter(([k]) => !current[k]);
     body.replaceChildren(...[
       el('div', { class: 'card' },
         el('h2', {}, `${toROC(current.week)} 這週`),
-        ...Object.entries(PARTS).map(([k, p]) => el('div', { class: 'list-item' },
+        ...Object.entries(labels).map(([k, p]) => el('div', { class: 'list-item' },
           el('span', {}, p.title),
           current[k]
             ? el('span', { class: 'tag' }, `✅ ${current[k].names.length} 人`)
             : el('span', { class: 'tag warn' }, `⏳ 等${p.by}`))),
-        waiting.length ? el('div', { class: 'notice warn' }, `還差：${waiting.map(([, p]) => p.by).join('、')}。完成後重新打開這一頁就會更新。`) : el('div', { class: 'notice ok' }, '🎉 三份都完成了！'),
+        waiting.length ? el('div', { class: 'notice warn' }, `還差：${[...new Set(waiting.map(([, p]) => p.by))].join('、')}。完成後重新打開這一頁就會更新。`) : el('div', { class: 'notice ok' }, '🎉 全部都完成了！'),
       ),
       el('div', { class: 'card' },
         el('h2', {}, '📋 合併名單'),

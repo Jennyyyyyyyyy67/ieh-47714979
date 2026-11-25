@@ -2,6 +2,7 @@
 import { el } from '../utils.js';
 import { listModels, DEFAULT_MODEL, pickBestFlash } from '../gemini.js';
 import { spinnerButton } from './common.js';
+import { PARTS, partLabels } from './report.js';
 
 export async function renderSettings(root, ctx) {
   const { store, toast } = ctx;
@@ -16,6 +17,12 @@ export async function renderSettings(root, ctx) {
   const sendWeekday = el('select', {}, ...['日', '一', '二', '三', '四', '五', '六'].map((d, i) => el('option', { value: String(i), selected: i === (s.sendWeekday ?? 2) }, `星期${d}`)));
   const sendTime = el('input', { type: 'time', value: s.sendTime || '17:00' });
   const retention = el('select', {}, ...[[7, '7 天後自動刪除（建議）'], [14, '14 天後自動刪除'], [30, '30 天後自動刪除'], [0, '不要自動刪除']].map(([v, t]) => el('option', { value: String(v), selected: v === (s.retentionDays ?? 7) }, t)));
+  // 本週名單的標題和獎勵文字
+  const labels = partLabels(s);
+  const labelInputs = Object.fromEntries(Object.keys(PARTS).map(k => [k, {
+    title: el('input', { type: 'text', value: labels[k].title }),
+    note: el('input', { type: 'text', value: labels[k].note, placeholder: '括號裡的文字，例如：5元心幣' }),
+  }]));
   const msg = el('div');
   const testBtn = el('button', { class: 'btn' }, '🔑 檢查鑰匙');
   testBtn.addEventListener('click', async () => {
@@ -38,7 +45,8 @@ export async function renderSettings(root, ctx) {
   });
   const saveBtn = el('button', { class: 'btn primary' }, '💾 儲存設定');
   saveBtn.addEventListener('click', async () => {
-    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, speaker: speaker.value.trim(), sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value) };
+    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, speaker: speaker.value.trim(), sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value),
+      reportLabels: Object.fromEntries(Object.entries(labelInputs).map(([k, v]) => [k, { title: v.title.value, note: v.note.value }])) };
     await store.saveSettings(next);
     await ctx.reloadSettings();
     toast('設定已儲存');
@@ -66,6 +74,13 @@ export async function renderSettings(root, ctx) {
     !isMain ? null : el('div', { class: 'card' },
       el('h2', {}, '⛪ 週會'),
       el('label', {}, '預設分享的老師'), speaker,
+    ),
+    el('div', { class: 'card' },
+      el('h2', {}, '📋 本週名單的格式'),
+      el('p', { class: 'muted' }, '名單上每一類的名稱，和括號裡的獎勵／處理方式。改完按最下面的「儲存設定」。'),
+      ...Object.entries(labelInputs).map(([k, v]) => el('div', { class: 'row' },
+        el('div', {}, el('label', {}, '名稱'), v.title),
+        el('div', {}, el('label', {}, '（括號裡的文字）'), v.note))),
     ),
     !isMain ? null : el('div', { class: 'card' },
       el('h2', {}, '⏰ 發送時間與清容量'),

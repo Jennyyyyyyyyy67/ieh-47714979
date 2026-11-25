@@ -229,7 +229,8 @@ export const GRADE_SCHEMA = {
 };
 
 /** answers：[{id:'S1', answer:'…'}]，只有代號，沒有學生名字 */
-export function gradePrompt({ question, reference, gradeBand, answers }) {
+export function gradePrompt({ question, reference, gradeBand, answers, kind }) {
+  if (kind === 'self') return selfQuestionPrompt({ question, gradeBand, answers });
   const text = `你是國小老師的批改助理，學生是${gradeBand || '國小'}的孩子。請判斷每位學生這一題的答案對不對。
 
 【題目】
@@ -248,6 +249,27 @@ ${reference ? reference : '（老師沒有給參考答案。請依題目判斷�
 - 每個 id 都要回答，不要漏掉，也不要自己加 id。
 
 【學生答案】（S 開頭是代號）
+${answers.map(a => `${a.id}：${a.answer}`).join('\n')}`;
+  return [{ text }];
+}
+
+/** 學生「自己出題、自己回答」：判斷題目合不合理、答案對不對 */
+function selfQuestionPrompt({ question, gradeBand, answers }) {
+  const text = `你是國小老師的批改助理，學生是${gradeBand || '國小'}的孩子。這一欄是學生「自己出題、自己回答」，題目和答案可能寫在同一格裡。
+
+【這一欄的說明】
+${question}
+
+【判斷規則】
+- 「對」：有認真出一題（和這次的學習有關、看得懂），而且自己寫的答案是正確的。
+- 「部分對」：題目或答案只有一半正確，或答案不完整。
+- 「錯」：答案是錯的、題目和答案對不起來、亂寫、或只寫題目沒寫答案。
+- 「無法判斷」：看不懂，或沒辦法確定答案對不對（例如需要查資料才知道）。
+- 錯字、注音、口語都可以接受（孩子年紀小，要寬鬆）。
+- reason 用 15 字以內、老師一眼看得懂的話，例如「題目清楚答案正確」「答案和題目不符」。
+- 每個 id 都要回答，不要漏掉，也不要自己加 id。
+
+【學生寫的內容】（S 開頭是代號）
 ${answers.map(a => `${a.id}：${a.answer}`).join('\n')}`;
   return [{ text }];
 }

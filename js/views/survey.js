@@ -22,6 +22,16 @@ export function isPerfect(r) {
   if (r.formScore) return r.formScore.total > 0 && r.formScore.got === r.formScore.total;
   return false;
 }
+/** 題目類型：大孩子的問卷分「老師出題」和「自出題」 */
+export const kindOf = (f, c) => (f.qkind || {})[c] || 'teacher';
+const guessKind = (header) => (/自己出|自出|自訂題|出一題/.test(header) ? 'self' : 'teacher');
+
+/** 某幾題是不是全部「對」（沒有題目就回傳 false） */
+export function allRight(r, cols) {
+  const cs = cols.filter(c => r.marks[c]);
+  return cs.length > 0 && cs.every(c => r.marks[c].verdict === '對');
+}
+
 const guessBand = (name) => (/1\s*[-~～－]\s*2/.test(name) ? '1-2年級' : /3\s*[-~～－]\s*8/.test(name) ? '3-8年級' : '');
 
 const S = { roster: '', deadlineDate: '', deadlineTime: '23:59', files: [] };
@@ -176,7 +186,7 @@ export async function aiGradeFile(file, { apiKey, model, gradeBand, onProgress }
       const answers = chunk.map((st, j) => ({ id: `S${i + j + 1}`, answer: String(st.r[c]).trim().slice(0, 500) }));
       const out = await callGemini({
         apiKey, model: model || DEFAULT_MODEL, temperature: 0.1, schema: GRADE_SCHEMA,
-        parts: gradePrompt({ question: file.headers[c], reference: (file.keys[c] || '').trim(), gradeBand, answers }),
+        parts: gradePrompt({ question: file.headers[c], reference: (file.keys[c] || '').trim(), gradeBand, answers, kind: kindOf(file, c) }),
       });
       for (const r of out.results || []) {
         const key = idOf.get(r.id);
@@ -265,7 +275,8 @@ export async function renderSurvey(root, ctx) {
         if (SKIP_HINTS.some(k => h.toLowerCase().includes(k))) return;
         keys[i] = '';
       });
-      S.files.push({ name: f.name, headers, rows: rows.slice(1), idCol: idCol < 0 ? 1 : idCol, tsCol, scoreCol, keys, band: band || guessBand(f.name) });
+      const qkind = Object.fromEntries(Object.keys(keys).map(i => [i, guessKind(headers[i])]));
+      S.files.push({ name: f.name, headers, rows: rows.slice(1), idCol: idCol < 0 ? 1 : idCol, tsCol, scoreCol, keys, qkind, band: band || guessBand(f.name) });
     }
     fileInput.value = '';
     draw();
@@ -315,7 +326,12 @@ export async function renderSurvey(root, ctx) {
         inp.addEventListener('change', () => { f.keys[i] = inp.value; draw(); });
         const skip = el('input', { type: 'checkbox', checked: !!(f.skip || {})[i] });
         skip.addEventListener('change', () => { f.skip = { ...(f.skip || {}), [i]: skip.checked }; draw(); });
+        const kindSel = el('select', { style: 'max-width:220px' },
+          el('option', { value: 'teacher', selected: kindOf(f, i) === 'teacher' }, '👩‍🏫 老師出題'),
+          el('option', { value: 'self', selected: kindOf(f, i) === 'self' }, '🧒 學生自出題'));
+        kindSel.addEventListener('change', () => { f.qkind = { ...(f.qkind || {}), [i]: kindSel.value }; delete (f.ai || {})[i]; draw(); });
         return el('div', {}, el('label', {}, `${qLabel(n)} ${f.headers[i]}`), inp,
+          f.band === '3-8年級' ? kindSel : null,
           el('label', { class: 'inline' }, skip, el('span', { class: 'muted' }, '這題不批改（例如：感想、心得）')),
           el('datalist', { id: listId }, ...answers.map(a => el('option', { value: a }))));
       });
@@ -351,19 +367,31 @@ export async function renderSurvey(root, ctx) {
         `需要再教的題目：${perQ.filter(q => q.n && q.ok / q.n < 0.6).map(q => qLabel(qIndex.get(q.col))).join('、') || '無'}`,
         `答對不到六成的學生（${needHelp.length}）：${needHelp.map(r => r.name).join('、') || '無'}`,
       ].join('\n');
-      const perfect = results.filter(isPerfect);
+      const isBig = f.band === '3-8年級';
+      const qCols = gradedCols(f);
+      const tCols = qCols.filter(c => kindOf(f, c) === 'teacher');
+      const sCols = qCols.filter(c => kindOf(f, c) === 'self');
+      // 小小孩：全部題目都對。大孩子：老師出題、自出題分開算。
+      const perfect = isBig ? results.filter(r => (tCols.length ? allRight(r, tCols) : isPerfect(r))) : results.filter(isPerfect);
+      const perfectSelf = isBig ? results.filter(r => allRight(r, sCols)) : [];
       const bandSel = el('select', {},
         el('option', { value: '' }, '（請選）'),
         el('option', { value: '1-2年級', selected: f.band === '1-2年級' }, '1-2年級'),
         el('option', { value: '3-8年級', selected: f.band === '3-8年級' }, '3-8年級'));
-      bandSel.addEventListener('change', () => { f.band = bandSel.value; });
+      bandSel.addEventListener('change', () => { f.band = bandSel.value; draw(); });
       const savePerfect = el('button', { class: 'btn primary', onclick: async () => {
         if (!f.band) { ctx.toast('請先選這份是幾年級的問卷'); return; }
         if (!results.some(r => r.total || r.formScore)) { ctx.toast('還沒批改：請先按「🤖 用 AI 批改」或填正確答案'); return; }
         const groupOf = new Map(list.map(st => [st.key, st.group]));
-        await saveReportPart(ctx, S.deadlineDate, f.band === '1-2年級' ? 'perfect12' : 'perfect38',
-          perfect.map(r => ({ name: r.name, group: groupOf.get(r.key) || '' })));
-        ctx.toast(`已存進本週名單：${f.band}全對 ${perfect.length} 人`);
+        const toNames = rs => rs.map(r => ({ name: r.name, group: groupOf.get(r.key) || '' }));
+        if (!isBig) {
+          await saveReportPart(ctx, S.deadlineDate, 'perfect12', toNames(perfect));
+          ctx.toast(`已存進本週名單：小小孩全對 ${perfect.length} 人`);
+          return;
+        }
+        await saveReportPart(ctx, S.deadlineDate, 'perfect38t', toNames(perfect));
+        if (sCols.length) await saveReportPart(ctx, S.deadlineDate, 'perfect38s', toNames(perfectSelf));
+        ctx.toast(`已存進本週名單：老師出題全對 ${perfect.length} 人${sCols.length ? `、自出題全對 ${perfectSelf.length} 人` : '（沒有設定自出題）'}`);
       } }, '💾 把全對名單存進本週名單');
       return el('div', { class: 'card' },
         el('div', { class: 'output-head' },
@@ -411,8 +439,10 @@ export async function renderSurvey(root, ctx) {
           el('div', { class: 'btns' }, el('button', { class: 'btn', onclick: async () => ctx.toast(await copyText(gradeSummary) ? '已複製' : '複製失敗') }, '📋 複製批改總結')),
           el('p', { class: 'muted' }, '⚠️ 總結裡有學生名字，只能給老師之間看，不要貼到家長群組。')) : null,
         el('div', { class: 'card', style: 'background:var(--primary-soft)' },
-          el('h3', { style: 'margin-top:0' }, `⭐ 全對的學生（${perfect.length} 人）`),
+          el('h3', { style: 'margin-top:0' }, isBig ? `⭐ 老師出題全對（${perfect.length} 人）` : `⭐ 全對的學生（${perfect.length} 人）`),
           el('p', {}, perfect.map(r => r.name).join('、') || '（目前沒有）'),
+          isBig ? el('h3', {}, `⭐ 自出題全對（${perfectSelf.length} 人）`) : null,
+          isBig ? el('p', {}, sCols.length ? (perfectSelf.map(r => r.name).join('、') || '（目前沒有）') : '（還沒設定哪一題是「學生自出題」：到上面「設定正確答案」裡選）') : null,
           el('div', { class: 'row' }, el('div', {}, el('label', {}, '這份是幾年級的問卷？'), bandSel)),
           el('div', { class: 'btns' }, savePerfect, el('button', { class: 'btn', onclick: () => ctx.go('report') }, '📋 看本週名單')),
         ),

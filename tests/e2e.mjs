@@ -31,7 +31,10 @@ async function mockGemini(page) {
     const images = body.contents[0].parts.filter(p => p.inline_data).length;
     geminiCalls.push({ text, images, key: req.headers()['x-goog-api-key'] });
     let out;
-    if (text.includes('請判斷每位學生這一題')) {
+    if (text.includes('自己出題、自己回答')) {
+      const lines = [...text.matchAll(/^(S\d+)：(.*)$/gm)];
+      out = { results: lines.map(([, id, ans]) => ({ id, verdict: /不知道/.test(ans) ? '錯' : '對', reason: '自出題判斷' })) };
+    } else if (text.includes('請判斷每位學生這一題')) {
       const lines = [...text.matchAll(/^(S\d+)：(.*)$/gm)];
       out = { results: lines.map(([, id, ans]) => ({
         id,
@@ -469,7 +472,7 @@ await step('本週名單：1-2年級老師存全對名單', async () => {
   await page.waitForSelector('text=⭐ 全對的學生（2 人）');
   assert.equal(await page.inputValue('select >> nth=-1'), '1-2年級', '從檔名自動判斷年級');
   await page.click('text=💾 把全對名單存進本週名單');
-  await page.waitForSelector('text=已存進本週名單：1-2年級全對 2 人');
+  await page.waitForSelector('text=已存進本週名單：小小孩全對 2 人');
 });
 
 await step('本週名單：切換成 3-8年級老師，上一位的檔案不見了；批改後存全對名單', async () => {
@@ -477,12 +480,17 @@ await step('本週名單：切換成 3-8年級老師，上一位的檔案不見�
   await pickRole(page, '批改 3-8 年級問卷');
   await page.waitForSelector('h1:has-text("📝 3-8年級答案批改")');
   assert.ok(!(await page.isVisible('text=小美同學')), '切換工作後不能看到上一位老師的回覆');
-  const csv = '時間戳記,你的名字,書怎麼排？\n2026/11/17 下午 6:00:00,大明同學,用分類號\n2026/11/17 下午 6:01:00,大華同學,依顏色\n';
+  const csv = '時間戳記,你的名字,書怎麼排？,請自己出一題並回答\n2026/11/17 下午 6:00:00,大明同學,用分類號,不知道\n2026/11/17 下午 6:01:00,大華同學,依顏色,問：書用什麼排？答：分類號\n';
   await page.setInputFiles('input[type=file][accept*=csv]', { name: '3-8年級問卷.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  // 「請自己出一題並回答」會自動被判斷成「學生自出題」
+  assert.equal(await page.inputValue('select:has(option[value=self]) >> nth=1'), 'self');
+  const before = geminiCalls.length;
   await page.click('button:has-text("🤖 用 AI 批改")');
-  await page.waitForSelector('text=⭐ 全對的學生（1 人）');
+  await page.waitForSelector('text=⭐ 老師出題全對（1 人）');
+  assert.ok(geminiCalls.slice(before).some(c => c.text.includes('自己出題、自己回答')), '自出題用專用的批改規則');
+  assert.ok(await page.isVisible('text=⭐ 自出題全對（1 人）'));
   await page.click('text=💾 把全對名單存進本週名單');
-  await page.waitForSelector('text=已存進本週名單：3-8年級全對 1 人');
+  await page.waitForSelector('text=已存進本週名單：老師出題全對 1 人、自出題全對 1 人');
 });
 
 await step('本週名單：主要老師存未填名單，三份自動合併成一份', async () => {
@@ -500,13 +508,27 @@ await step('本週名單：主要老師存未填名單，三份自動合併成�
   await page.click('text=💾 把未填名單存進本週名單');
   await page.waitForSelector('text=已存進本週名單：未填問卷 2 人');
   await page.click('.tabs >> text=📋 本週名單');
-  await page.waitForSelector('text=🎉 三份都完成了');
+  await page.waitForSelector('text=🎉 全部都完成了');
   const text = await page.textContent('.bubble');
-  assert.ok(text.includes('📝 未填問卷（2 人）'), text);
-  assert.ok(text.includes('・1年級 快樂兔：沒交甲'), text);
-  assert.ok(text.includes('・6年級 忠心象：沒交乙'), text);
-  assert.ok(text.includes('⭐ 1-2年級全對（2 人）') && text.includes('小美同學、小華同學'), text);
-  assert.ok(text.includes('⭐ 3-8年級全對（1 人）') && text.includes('大明同學'), text);
+  const want = [
+    '未填問卷：（補填問卷、抄未完成作業箴言3次/一年級1次）\n1年級 快樂兔：沒交甲\n6年級 忠心象：沒交乙',
+    '大孩子老師出題全對：（5元心幣）\n大明同學',
+    '大孩子自出題全對：（5元心幣）\n大華同學',
+    '小小孩全對：（10元心幣）\n小美同學、小華同學',
+  ];
+  let at = -1;
+  for (const w of want) { const i = text.indexOf(w); assert.ok(i > at, `順序或內容不對：${w}\n---\n${text}`); at = i; }
+});
+
+await step('名單格式：可以在設定改獎勵文字', async () => {
+  await page.click('.tabs >> text=⚙️ 設定');
+  const note = page.locator('.card:has-text("本週名單的格式") input >> nth=7');
+  assert.equal(await note.inputValue(), '10元心幣');
+  await note.fill('20元心幣');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+  await page.click('.tabs >> text=📋 本週名單');
+  assert.ok((await page.textContent('.bubble')).includes('小小孩全對：（20元心幣）'));
 });
 
 await step('不同老師的資料分開', async () => {
