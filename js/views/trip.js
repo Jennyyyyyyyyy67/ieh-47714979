@@ -48,8 +48,8 @@ export function assembleTexts(S, r) {
   if (S.outputs.survey) {
     texts.survey = [
       '📋 問卷標題（複製到 Google 表單）',
-      `小小孩：${surveyTitle(S.date, `${S.survey.smallRange}年級`, S.place)}`,
-      `大孩子：${surveyTitle(S.date, `${S.survey.bigRange}年級`, S.place)}`,
+      `小小孩：${surveyTitle(S.date, '小小孩', S.place)}`,
+      `大孩子：${surveyTitle(S.date, '大孩子', S.place)}`,
       '',
       '💬 建議放進問卷的題目（回家可以問孩子的問題）：',
       ...(qs.length ? qs.map((q, i) => `${i + 1}. ${q}`) : ['（AI 沒有產生題目，請老師自行補上）']),
@@ -261,7 +261,7 @@ export async function renderTrip(root, ctx) {
   function drawSurveyTitles() {
     titlesBox.replaceChildren(
       el('div', { class: 'muted' }, '建議的問卷標題（產生文案後，在「問卷題目」區塊可以一起複製）：'),
-      el('div', { class: 'bubble' }, `${surveyTitle(S.date, `${S.survey.smallRange}年級`, S.place)}\n${surveyTitle(S.date, `${S.survey.bigRange}年級`, S.place)}`),
+      el('div', { class: 'bubble' }, `${surveyTitle(S.date, '小小孩', S.place)}\n${surveyTitle(S.date, '大孩子', S.place)}`),
     );
   }
 

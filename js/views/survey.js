@@ -24,7 +24,7 @@ export function isPerfect(r) {
 }
 /** 題目類型：大孩子的問卷分「老師出題」和「自出題」 */
 export const kindOf = (f, c) => (f.qkind || {})[c] || 'teacher';
-const guessKind = (header) => (/自己出|自出|自訂題|出一題/.test(header) ? 'self' : 'teacher');
+const guessKind = (header) => (/自行編題|編題|自己出|自出|自訂題|出一題|問\s*[+＋]\s*答/.test(header) ? 'self' : 'teacher');
 
 /** 某幾題是不是全部「對」（沒有題目就回傳 false） */
 export function allRight(r, cols) {
@@ -414,6 +414,7 @@ export async function renderSurvey(root, ctx) {
         ),
         el('details', { open: !anyKey && f.scoreCol < 0 }, el('summary', {}, '✏️ 設定正確答案（選擇題填答案；簡答題可以留空給 AI 判斷）'),
           el('p', { class: 'muted' }, '可以從下拉選單選學生填過的答案。複選題用分號分開，例如：A;C'),
+          el('div', { class: 'notice warn' }, '📷 看圖回答的題目：AI 看不到問卷裡的圖片，請一定要填正確答案，不然 AI 可能判錯。'),
           ...keyInputs),
         el('div', { class: 'notice ok' }, '🤖 AI 批改：只會送「S1、S2…」代號和答案給 AI，不會送學生名字。AI 也可能看錯，結果要請老師看過。'),
         el('div', { class: 'btns' }, aiBtn),

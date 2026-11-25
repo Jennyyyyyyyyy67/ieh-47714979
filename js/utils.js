@@ -38,9 +38,11 @@ export function toROC(iso) {
   return `${y - 1911}/${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}`;
 }
 
-/** 問卷標題，例如「115/11/17 戶外踏查1-3年級問卷_台灣滷味博物館」 */
-export function surveyTitle(iso, gradeLabel, place) {
-  return `${toROC(iso)} 戶外踏查${gradeLabel}問卷_${place || '（地點）'}`;
+/** 問卷標題，照學校表單的寫法，例如「115/9/29戶外踏查大孩子問卷_台灣滷味博物館」 */
+export function surveyTitle(iso, groupLabel, place) {
+  const [y, m, d] = (iso || '').split('-').map(Number);
+  const roc = y ? `${y - 1911}/${m}/${d}` : '';
+  return `${roc}戶外踏查${groupLabel}問卷_${place || '（地點）'}`;
 }
 
 /** 計算字數：不算空白和換行 */

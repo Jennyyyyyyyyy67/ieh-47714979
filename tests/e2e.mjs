@@ -176,8 +176,8 @@ await step('踏查：問卷連結＋自動問卷標題', async () => {
   await page.fill('input[type=url] >> nth=0', 'https://forms.gle/AAA');
   await page.fill('input[type=url] >> nth=1', 'https://forms.gle/BBB');
   const titles = await page.textContent('.bubble');
-  assert.ok(/戶外踏查1-3年級問卷_高雄市立圖書館總館/.test(titles));
-  assert.ok(/^\d{3}\/\d{2}\/\d{2} /.test(titles), '民國日期格式');
+  assert.ok(/戶外踏查小小孩問卷_高雄市立圖書館總館/.test(titles));
+  assert.ok(/^\d{3}\/\d{1,2}\/\d{1,2}戶外踏查小小孩問卷_/.test(titles), titles);
 });
 
 await step('踏查：產生四種版本＋問卷題目', async () => {
@@ -201,7 +201,7 @@ await step('LINE 版：照範本格式、附問卷連結和 12 點提醒', async
 
 await step('問卷區塊：有標題和回家可以問孩子的問題', async () => {
   const t = await outText('問卷標題＋題目');
-  assert.ok(t.includes('戶外踏查4-6年級問卷_高雄市立圖書館總館'));
+  assert.ok(t.includes('戶外踏查大孩子問卷_高雄市立圖書館總館'));
   assert.ok(t.includes('1. 你今天用什麼方法找到想看的書？'));
 });
 
@@ -480,7 +480,7 @@ await step('本週名單：切換成 3-8年級老師，上一位的檔案不見�
   await pickRole(page, '批改大孩子問卷');
   await page.waitForSelector('h1:has-text("📝 大孩子問卷答案批改")');
   assert.ok(!(await page.isVisible('text=小美同學')), '切換工作後不能看到上一位老師的回覆');
-  const csv = '時間戳記,你的名字,書怎麼排？,請自己出一題並回答\n2026/11/17 下午 6:00:00,大明同學,用分類號,不知道\n2026/11/17 下午 6:01:00,大華同學,依顏色,問：書用什麼排？答：分類號\n';
+  const csv = '時間戳記,請問你的班級是?,請問你的姓名是?,書怎麼排？,8. 自行編題(問+答)\n2026/11/17 下午 6:00:00,勇氣虎,大明同學,用分類號,不知道\n2026/11/17 下午 6:01:00,恩典鷹,大華同學,依顏色,問：書用什麼排？答：分類號\n';
   await page.setInputFiles('input[type=file][accept*=csv]', { name: '大孩子問卷（4-6年級）.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
   // 「請自己出一題並回答」會自動被判斷成「學生自出題」
   assert.equal(await page.inputValue('select:has(option[value=self]) >> nth=1'), 'self');
