@@ -8,6 +8,7 @@ import { renderPublish, renderHistory } from './views/publish.js';
 import { renderSettings } from './views/settings.js';
 import { renderSurvey, ROLES, resetSurvey } from './views/survey.js';
 import { renderReport } from './views/report.js';
+import { renderPlaces } from './views/places.js';
 
 const app = document.getElementById('app');
 const tabsEl = document.getElementById('tabs');
@@ -17,6 +18,7 @@ const toastEl = document.getElementById('toast');
 
 const TABS = [
   { key: 'trip', label: '🚌 踏查', render: renderTrip, roles: ['main'] },
+  { key: 'places', label: '📍 踏查地點', render: renderPlaces, roles: ['main'] },
   { key: 'meeting', label: '⛪ 週會', render: renderMeeting, roles: ['main'] },
   { key: 'publish', label: '📤 本週發送', render: renderPublish, roles: ['main'] },
   { key: 'survey', label: '📊 問卷檢查', helperLabel: '📝 答案批改', render: renderSurvey, roles: ['main', 'g12', 'g38'] },

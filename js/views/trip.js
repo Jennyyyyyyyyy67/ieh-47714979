@@ -3,6 +3,8 @@ import { el, todayISO, toROC, surveyTitle, resizeImage, fileToBase64, formatByte
 import { callGemini, DEFAULT_MODEL } from '../gemini.js';
 import { PHOTO_SCHEMA, photoPrompt, TRIP_SCHEMA, tripPrompt } from '../prompts.js';
 import { publishChecklist, outputBlock, spinnerButton } from './common.js';
+import { recordVisit } from './places.js';
+import { findPlace, visitSummary, typeLabel, DEFAULT_DEPART, DEFAULT_RETURN, DEFAULT_RETURN_PLACE, tripDates, DEFAULT_QUARTER_START } from '../places-logic.js';
 
 const MAX_PHOTOS = 12;
 const MAMMOTH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
@@ -96,6 +98,11 @@ export async function renderTrip(root, ctx) {
     if (last?.survey?.smallRange) S.survey.smallRange = last.survey.smallRange;
     if (last?.survey?.bigRange) S.survey.bigRange = last.survey.bigRange;
   }
+  const places = await store.list('places');
+  const plan = (await store.list('plans')).find(p => p.id === 'current') || null;
+  // 新的一次：行程表先帶入每週固定的出發和回來時間
+  const depart = settings.departTime || DEFAULT_DEPART, back = settings.returnTime || DEFAULT_RETURN, backAt = settings.returnPlace || DEFAULT_RETURN_PLACE;
+  if (!S.id && !S.scheduleText.trim()) S.scheduleText = `${depart} 從${backAt}出發\n${back} 回到${backAt}`;
   let namesForCheck = '';      // 老師臨時輸入的學生名字：只放在記憶體，不儲存
   const getNames = () => namesForCheck.split(/[\s,，、]+/).filter(Boolean);
 
@@ -109,14 +116,29 @@ export async function renderTrip(root, ctx) {
   // ===== 第 1 步：基本資料＋行程表／學習單 =====
   const f = {
     date: el('input', { type: 'date', value: S.date }),
-    place: el('input', { type: 'text', value: S.place, placeholder: '例如：高雄市立圖書館總館' }),
+    place: el('input', { type: 'text', value: S.place, placeholder: '例如：高雄市立圖書館總館', list: 'placeList', autocomplete: 'off' }),
     title: el('input', { type: 'text', value: S.title, placeholder: '例如：建築與視野探索（可留空）' }),
     grades: el('input', { type: 'text', value: S.grades, placeholder: '例如：1-8年級' }),
     schedule: el('textarea', { placeholder: '把行程表、學習單的文字貼在這裡。\n例如：\n09:00 出發\n09:30 主題書區導覽\n10:30 用分類號找書、交換閱讀\n11:30 學習單分享', style: 'min-height:160px' }),
   };
   f.schedule.value = S.scheduleText;
-  f.date.addEventListener('change', () => { S.date = f.date.value; applyWeekRanges(true); drawSurveyTitles(); });
-  f.place.addEventListener('input', () => { S.place = f.place.value; drawSurveyTitles(); });
+  f.date.addEventListener('change', () => { S.date = f.date.value; applyWeekRanges(true); drawPlaceHint(); drawSurveyTitles(); });
+  const placeHint = el('div', { class: 'muted' });
+  const placeList = el('datalist', { id: 'placeList' }, ...places.map(p => el('option', { value: p.name }, typeLabel(p.type))));
+  function drawPlaceHint() {
+    const hit = findPlace(places, f.place.value);
+    const planWeek = plan?.weeks?.find(w => w.date === S.date);
+    const pm = new Map(places.map(p => [p.id, p]));
+    const nodes = [];
+    if (hit) nodes.push(el('div', { class: hit.visits?.length ? 'notice warn' : 'notice ok' }, `📍 ${typeLabel(hit.type)}｜${visitSummary(hit)}`));
+    else if (f.place.value.trim()) nodes.push(el('div', { class: 'muted' }, '這個地點還不在地點庫裡，產生文案時會自動加進去（室內外要到「📍 踏查地點」補）。'));
+    if (planWeek) {
+      const mk = (label, id) => { const p = pm.get(id); return p ? el('button', { class: 'btn small', onclick: () => { f.place.value = p.name; S.place = p.name; drawPlaceHint(); drawSurveyTitles(); } }, `${label} ${p.name}`) : null; };
+      nodes.push(el('div', { class: 'btns', style: 'margin-top:6px' }, el('span', { class: 'muted' }, `本週計畫：`), mk('☀️ 天晴', planWeek.sunnyId), planWeek.rainyId !== planWeek.sunnyId ? mk('☔ 下雨', planWeek.rainyId) : null));
+    }
+    placeHint.replaceChildren(...nodes.filter(Boolean));
+  }
+  f.place.addEventListener('input', () => { S.place = f.place.value; drawPlaceHint(); drawSurveyTitles(); });
   f.title.addEventListener('input', () => { S.title = f.title.value; });
   f.grades.addEventListener('input', () => { S.grades = f.grades.value; });
   f.schedule.addEventListener('input', () => { S.scheduleText = f.schedule.value; });
@@ -261,7 +283,7 @@ export async function renderTrip(root, ctx) {
   const weekInfo = el('div', { class: 'muted' });
   /** 依學季第幾週，自動填年級範圍。force=true：日期改了就重算；手動改過的不會被蓋掉（除非日期又換了） */
   function applyWeekRanges(force) {
-    const start = settings.quarterStart;
+    const start = settings.quarterStart || DEFAULT_QUARTER_START;
     const n = quarterWeek(S.date, start);
     const r = weekRanges(n);
     if (!start) { weekInfo.textContent = '💡 到「⚙️ 設定」填學季第一週的日期，系統就會自動填年級範圍。'; return; }
@@ -315,6 +337,11 @@ export async function renderTrip(root, ctx) {
       S.result = r;
       S.texts = assembleTexts(S, r);
       await save();
+      // 記進地點庫：這個地點這天去過
+      try {
+        const rec = await recordVisit(store, S.place, S.date);
+        if (rec?.created) toast('📍 已把這個新地點加進地點庫，室內外請到「📍 踏查地點」確認');
+      } catch (err) { console.error(err); }
       toast('文案完成，已自動儲存（照片不會儲存）');
     } catch (e) {
       genMsg.replaceChildren(el('div', { class: 'notice danger' }, e.message));
@@ -398,7 +425,7 @@ export async function renderTrip(root, ctx) {
       el('h2', {}, el('span', { class: 'step-num' }, '1'), '行程表／學習單'),
       el('div', { class: 'row' },
         el('div', {}, el('label', {}, '日期'), f.date),
-        el('div', {}, el('label', {}, '地點 *'), f.place),
+        el('div', {}, el('label', {}, '地點 *'), f.place, placeList, placeHint),
       ),
       el('div', { class: 'row' },
         el('div', {}, el('label', {}, '活動名稱'), f.title),
@@ -436,5 +463,5 @@ export async function renderTrip(root, ctx) {
     resultBox,
   );
   if (!settings.geminiKey) root.prepend(el('div', { class: 'notice danger' }, '還沒設定 Gemini 鑰匙，AI 功能不能用。', el('button', { class: 'btn small', onclick: () => ctx.go('settings') }, '去設定')));
-  applyWeekRanges(!S.id); drawDocs(); drawPhotos(); drawReview(); drawSurveyTitles(); drawResult(); updateLocks();
+  applyWeekRanges(!S.id); drawPlaceHint(); drawDocs(); drawPhotos(); drawReview(); drawSurveyTitles(); drawResult(); updateLocks();
 }

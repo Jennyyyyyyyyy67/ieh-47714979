@@ -123,6 +123,10 @@ await step('設定 Gemini 鑰匙並檢查', async () => {
   await page.fill('input[placeholder*="AI Studio"]', 'FAKE-KEY-123');
   await page.click('text=🔑 檢查鑰匙');
   await page.waitForSelector('text=鑰匙可以用');
+  // 讓「今天」剛好是學季第 2 週（雙週：1-3 / 4-6），測試才不會因為跑的日期不同而變
+  const d = new Date(); d.setDate(d.getDate() - 7);
+  const startISO = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  await page.fill('.card:has-text("發送時間") input[type=date]', startISO);
   await page.click('text=💾 儲存設定');
   await page.waitForSelector('text=設定已儲存');
 });
@@ -554,6 +558,91 @@ await step('學季週次：設定第一週日期後，踏查自動填年級範�
   assert.ok((await page.textContent('main')).includes('不在這個學季的 1～10 週內'));
 });
 
+await step('踏查地點：新增、一次貼上、搜尋（打名字知道什麼時候去過）', async () => {
+  // 開學日是 11/16：先把學季第一週設成它（這樣第 1 週就是 11/17）
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.fill('.card:has-text("發送時間") input[type=date]', '2026-11-16');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+  await page.click('.tabs >> text=📍 踏查地點');
+  await page.waitForSelector('h1:has-text("📍 踏查地點")');
+  assert.ok((await page.textContent('main')).includes('每週二 13:30 出發、16:00 回到青埔'));
+  await page.fill('input[placeholder*="台灣滷味博物館"]', '台灣滷味博物館');
+  await page.fill('input[placeholder*="去過的日期"]', '115/9/29');
+  await page.click('button:has-text("儲存")');
+  await page.waitForSelector('.topic >> text=台灣滷味博物館');
+  await page.fill('textarea[placeholder*="一行一個，用逗號分開"]', [
+    '地點,室內或室外,日期', '高雄市立總圖,室內,115/8/4;115/3/10', '愛河河堤,室外,115/7/7', '植物園,室內外', '消防局,室內', '美術館,室內,115/5/5',
+    '城市公園,室外', '海邊步道,室外,114/11/4', '科學工藝博物館,室內', '警察局,室內,115/6/2', '亂寫的,不知道',
+  ].join('\n'));
+  await page.click('text=加入這些地點');
+  await page.waitForSelector('text=新增 9 個');
+  assert.ok(await page.isVisible('text=請寫「室內」「室外」或「室內外」'), '看不懂的那行要提醒');
+  assert.ok(await page.isVisible('text=共 11 個地點'));
+  await page.fill('input[placeholder*="打地點名稱"]', '總圖');
+  const card = await page.textContent('.topic');
+  assert.ok(card.includes('高雄市立總圖') && card.includes('去過 2 次，最近一次 115/08/04'), card);
+  assert.equal(await page.locator('.topic').count(), 1);
+  assert.ok(!(await page.textContent('main')).includes('地點庫裡沒有「總圖」'), '找得到相近的，就不能說「沒有」');
+  await page.fill('input[placeholder*="打地點名稱"]', '臺灣滷味　博物館');
+  assert.ok((await page.textContent('.topic')).includes('台灣滷味博物館'), '台／臺、空白都要能找到');
+  await page.fill('input[placeholder*="打地點名稱"]', '沒這個地方');
+  await page.waitForSelector('text=地點庫裡沒有「沒這個地方」');
+  await page.fill('input[placeholder*="打地點名稱"]', '');
+});
+
+await step('踏查地點：自動排 10 週，晴天不重複、雨天一定是室內', async () => {
+  await page.click('text=🗓️ 自動排 10 週');
+  await page.waitForSelector('text=第 10 週');
+  assert.equal(await page.locator('.plan-row select').count(), 20);
+  const rows = await page.$$eval('.plan-row', els => els.map(e => [...e.querySelectorAll('select')].map(s => s.selectedOptions[0].textContent)));
+  assert.equal(rows.length, 10);
+  const sunny = rows.map(r => r[0]);
+  assert.equal(new Set(sunny).size, 10, '晴天地點不重複：' + sunny);
+  for (const r of rows) assert.ok(!r[1].startsWith('🌳') && !r[1].includes('（空）'), '雨天備案不能是室外或空的：' + r[1]);
+  assert.ok((await page.textContent('main')).includes('115/11/17（二）'), '第 1 週是 11/17');
+  assert.ok((await page.textContent('main')).includes('116/01/19（二）'), '第 10 週是 1/19');
+});
+
+await step('踏查地點：每週的地點可以自己改，重新整理還在', async () => {
+  const sel = page.locator('.plan-row').first().locator('select').first();
+  await sel.selectOption({ label: '🏠 警察局' });
+  await page.reload();
+  await page.click('.tabs >> text=📍 踏查地點');
+  await page.waitForSelector('text=第 10 週');
+  assert.equal(await page.locator('.plan-row').first().locator('select').first().evaluate(s => s.selectedOptions[0].textContent), '🏠 警察局');
+});
+
+await step('踏查：行程表自動帶入 13:30 出發／16:00 回青埔；打地點顯示去過；產生後自動記一次', async () => {
+  await page.click('.tabs >> text=🚌 踏查');
+  await page.click('text=🆕 開始新的一次');
+  assert.equal(await page.inputValue('textarea[placeholder*="行程表、學習單的文字"]'), '13:30 從青埔出發\n16:00 回到青埔');
+  await page.fill('input[placeholder*="高雄市立圖書館"]', '高雄市立總圖');
+  await page.waitForSelector('text=去過 2 次，最近一次 115/08/04');
+  assert.ok((await page.textContent('main')).includes('🏠 室內'));
+  // 計畫裡有這一天的話，會出現快速填入按鈕
+  await page.fill('input[type=date] >> nth=0', '2026-11-17');
+  await page.dispatchEvent('input[type=date] >> nth=0', 'change');
+  await page.waitForSelector('text=本週計畫：');
+  assert.ok(await page.isVisible('button:has-text("☀️ 天晴")'));
+  await page.click('button:has-text("☀️ 天晴")');
+  assert.equal(await page.inputValue('input[placeholder*="高雄市立圖書館"]'), '警察局');
+  // 一個地點庫裡沒有的新地點
+  await page.fill('input[placeholder*="高雄市立圖書館"]', '全新的博物館');
+  await page.waitForSelector('text=還不在地點庫裡');
+  await page.fill('textarea[placeholder*="行程表、學習單的文字"]', '13:30 從青埔出發\n14:00 參觀\n16:00 回到青埔');
+  await page.click('button:has-text("✨ 產生文案")');
+  await page.waitForSelector('text=📝 教學紀錄');
+  await page.click('.tabs >> text=📍 踏查地點');
+  await page.fill('input[placeholder*="打地點名稱"]', '全新的博物館');
+  await page.waitForSelector('.topic:has-text("全新的博物館")');
+  const c = await page.textContent('.topic');
+  assert.ok(c.includes('去過 1 次，最近一次 115/11/17'), c);
+  assert.ok(c.includes('請確認室內／室外'), '自動加入的新地點要請老師確認室內外');
+  // 同一個地點同一天不會重複記
+  await page.fill('input[placeholder*="打地點名稱"]', '');
+});
+
 await step('不同老師的資料分開', async () => {
   await page.click('text=登出');
   await page.fill('input[type=email]', 'teacherB@example.com');
@@ -582,7 +671,7 @@ await step('手機畫面：沒有左右捲動', async () => {
   await mp.click('text=第一次使用：註冊');
   await pickRole(mp, '踏查、週會、發送');
   await mp.waitForSelector('text=⚙️ 設定');
-  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📊 問卷檢查', '📋 本週名單', '🗂️ 紀錄', '⚙️ 設定']) {
+  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📍 踏查地點', '📊 問卷檢查', '📋 本週名單', '🗂️ 紀錄', '⚙️ 設定']) {
     await mp.click(`.tabs >> text=${tab}`);
     await mp.waitForTimeout(150);
     const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
