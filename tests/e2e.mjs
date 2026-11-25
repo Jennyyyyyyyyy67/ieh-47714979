@@ -531,6 +531,29 @@ await step('名單格式：可以在設定改獎勵文字', async () => {
   assert.ok((await page.textContent('.bubble')).includes('小小孩全對：（20元心幣）'));
 });
 
+await step('學季週次：設定第一週日期後，踏查自動填年級範圍；手動改過的不被蓋掉', async () => {
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.fill('.card:has-text("發送時間") input[type=date]', '2026-09-28');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+  await page.click('.tabs >> text=🚌 踏查');
+  await page.click('text=🆕 開始新的一次');
+  const setDate = async d => { await page.fill('input[type=date] >> nth=0', d); await page.dispatchEvent('input[type=date] >> nth=0', 'change'); };
+  const ranges = async () => [await page.inputValue('input[placeholder="例如：1-3"]'), await page.inputValue('input[placeholder="例如：4-6"]')];
+  const cases = [['2026-09-29', 1, ['1-2', '3-8']], ['2026-10-06', 2, ['1-3', '4-6']], ['2026-10-13', 3, ['1-3', '4-8']], ['2026-10-27', 5, ['1-2', '3-8']], ['2026-11-24', 9, ['1-2', '3-8']], ['2026-12-01', 10, ['1-3', '4-6']]];
+  for (const [d, n, want] of cases) {
+    await setDate(d);
+    assert.deepEqual(await ranges(), want, `${d} 第${n}週`);
+    assert.ok((await page.textContent('text=這是學季第')).includes(`第 ${n} 週`));
+  }
+  await page.fill('input[placeholder="例如：1-3"]', '1-4');
+  await page.fill('input[placeholder="例如：4-6"]', '5-8');
+  await page.click('label:has-text("小小孩問卷連結")');
+  assert.deepEqual(await ranges(), ['1-4', '5-8'], '手動改的要保留');
+  await setDate('2026-12-08');
+  assert.ok((await page.textContent('main')).includes('不在這個學季的 1～10 週內'));
+});
+
 await step('不同老師的資料分開', async () => {
   await page.click('text=登出');
   await page.fill('input[type=email]', 'teacherB@example.com');

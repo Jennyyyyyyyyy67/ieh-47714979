@@ -1,5 +1,5 @@
 // 🚌 每週二踏查：行程表 → 照片 → AI 看照片（老師核對）→ 問卷連結 → 產生文案 → 檢查清單 → 複製
-import { el, todayISO, toROC, surveyTitle, resizeImage, fileToBase64, formatBytes } from '../utils.js';
+import { el, todayISO, toROC, surveyTitle, resizeImage, fileToBase64, formatBytes, quarterWeek, weekRanges } from '../utils.js';
 import { callGemini, DEFAULT_MODEL } from '../gemini.js';
 import { PHOTO_SCHEMA, photoPrompt, TRIP_SCHEMA, tripPrompt } from '../prompts.js';
 import { publishChecklist, outputBlock, spinnerButton } from './common.js';
@@ -115,7 +115,7 @@ export async function renderTrip(root, ctx) {
     schedule: el('textarea', { placeholder: '把行程表、學習單的文字貼在這裡。\n例如：\n09:00 出發\n09:30 主題書區導覽\n10:30 用分類號找書、交換閱讀\n11:30 學習單分享', style: 'min-height:160px' }),
   };
   f.schedule.value = S.scheduleText;
-  f.date.addEventListener('change', () => { S.date = f.date.value; drawSurveyTitles(); });
+  f.date.addEventListener('change', () => { S.date = f.date.value; applyWeekRanges(true); drawSurveyTitles(); });
   f.place.addEventListener('input', () => { S.place = f.place.value; drawSurveyTitles(); });
   f.title.addEventListener('input', () => { S.title = f.title.value; });
   f.grades.addEventListener('input', () => { S.grades = f.grades.value; });
@@ -256,7 +256,22 @@ export async function renderTrip(root, ctx) {
   const smallRange = el('input', { type: 'text', value: S.survey.smallRange, placeholder: '例如：1-3', style: 'max-width:140px' });
   const bigRange = el('input', { type: 'text', value: S.survey.bigRange, placeholder: '例如：4-6', style: 'max-width:140px' });
   smallRange.addEventListener('input', () => { S.survey.smallRange = smallRange.value.trim().replace(/年級$/, ''); drawSurveyTitles(); });
-  bigRange.addEventListener('input', () => { S.survey.bigRange = bigRange.value.trim().replace(/年級$/, ''); drawSurveyTitles(); });
+  bigRange.addEventListener('input', () => { S.survey.bigRange = bigRange.value.trim().replace(/年級$/, ''); S.survey.rangeEdited = true; drawSurveyTitles(); });
+  smallRange.addEventListener('input', () => { S.survey.rangeEdited = true; });
+  const weekInfo = el('div', { class: 'muted' });
+  /** 依學季第幾週，自動填年級範圍。force=true：日期改了就重算；手動改過的不會被蓋掉（除非日期又換了） */
+  function applyWeekRanges(force) {
+    const start = settings.quarterStart;
+    const n = quarterWeek(S.date, start);
+    const r = weekRanges(n);
+    if (!start) { weekInfo.textContent = '💡 到「⚙️ 設定」填學季第一週的日期，系統就會自動填年級範圍。'; return; }
+    if (!r) { weekInfo.textContent = '這個日期不在這個學季的 1～10 週內，請手動填年級範圍（或到設定更新學季日期）。'; return; }
+    weekInfo.textContent = `📅 這是學季第 ${n} 週：小小孩 ${r.small} 年級、大孩子 ${r.big} 年級（可以手動改）`;
+    if (force || !S.survey.rangeEdited) {
+      S.survey.smallRange = r.small; S.survey.bigRange = r.big; S.survey.rangeEdited = false;
+      smallRange.value = r.small; bigRange.value = r.big;
+    }
+  }
   const titlesBox = el('div');
   function drawSurveyTitles() {
     titlesBox.replaceChildren(
@@ -408,6 +423,7 @@ export async function renderTrip(root, ctx) {
     el('div', { class: 'card' },
       el('h2', {}, el('span', { class: 'step-num' }, '4'), '問卷連結'),
       el('p', { class: 'muted' }, '每週新的 Google 表單連結貼在這裡。沒有問卷就留空，家長訊息就不會出現問卷那一段。'),
+      weekInfo,
       el('div', { class: 'row' },
         el('div', {}, el('label', {}, '小小孩是幾年級？'), smallRange),
         el('div', {}, el('label', {}, '大孩子是幾年級？'), bigRange),
@@ -420,5 +436,5 @@ export async function renderTrip(root, ctx) {
     resultBox,
   );
   if (!settings.geminiKey) root.prepend(el('div', { class: 'notice danger' }, '還沒設定 Gemini 鑰匙，AI 功能不能用。', el('button', { class: 'btn small', onclick: () => ctx.go('settings') }, '去設定')));
-  drawDocs(); drawPhotos(); drawReview(); drawSurveyTitles(); drawResult(); updateLocks();
+  applyWeekRanges(!S.id); drawDocs(); drawPhotos(); drawReview(); drawSurveyTitles(); drawResult(); updateLocks();
 }

@@ -290,3 +290,22 @@ export function weekKey(iso, weekday = 2) {
   d.setDate(d.getDate() - mondayOffset + ((weekday + 6) % 7));
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+// ---------- 學季週次與年級分組 ----------
+
+/** 這一天是學季的第幾週（第一週的任何一天都算第 1 週）。超出 1～10 回傳 null。 */
+export function quarterWeek(dateISO, startISO, weeks = 10) {
+  if (!dateISO || !startISO) return null;
+  const mon = iso => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
+  const n = Math.round((mon(dateISO) - mon(startISO)) / (7 * 86400000)) + 1;
+  return n >= 1 && n <= weeks ? n : null;
+}
+
+/**
+ * 學校的規則：第 1、5、9 週 → 1-2／3-8；其他單週 → 1-3／4-8；雙週 → 1-3／4-6。
+ */
+export function weekRanges(n) {
+  if (!n) return null;
+  if (n % 4 === 1) return { small: '1-2', big: '3-8' };
+  return n % 2 === 1 ? { small: '1-3', big: '4-8' } : { small: '1-3', big: '4-6' };
+}

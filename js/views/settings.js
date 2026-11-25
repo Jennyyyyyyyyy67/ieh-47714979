@@ -16,6 +16,7 @@ export async function renderSettings(root, ctx) {
   const speaker = el('input', { type: 'text', value: s.speaker || '蓓禎老師' });
   const sendWeekday = el('select', {}, ...['日', '一', '二', '三', '四', '五', '六'].map((d, i) => el('option', { value: String(i), selected: i === (s.sendWeekday ?? 2) }, `星期${d}`)));
   const sendTime = el('input', { type: 'time', value: s.sendTime || '17:00' });
+  const quarterStart = el('input', { type: 'date', value: s.quarterStart || '' });
   const retention = el('select', {}, ...[[7, '7 天後自動刪除（建議）'], [14, '14 天後自動刪除'], [30, '30 天後自動刪除'], [0, '不要自動刪除']].map(([v, t]) => el('option', { value: String(v), selected: v === (s.retentionDays ?? 7) }, t)));
   // 本週名單的標題和獎勵文字
   const labels = partLabels(s);
@@ -45,7 +46,7 @@ export async function renderSettings(root, ctx) {
   });
   const saveBtn = el('button', { class: 'btn primary' }, '💾 儲存設定');
   saveBtn.addEventListener('click', async () => {
-    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, speaker: speaker.value.trim(), sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value),
+    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, speaker: speaker.value.trim(), sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value), quarterStart: quarterStart.value,
       reportLabels: Object.fromEntries(Object.entries(labelInputs).map(([k, v]) => [k, { title: v.title.value, note: v.note.value }])) };
     await store.saveSettings(next);
     await ctx.reloadSettings();
@@ -88,6 +89,8 @@ export async function renderSettings(root, ctx) {
         el('div', {}, el('label', {}, '每週發送日'), sendWeekday),
         el('div', {}, el('label', {}, '發送時間'), sendTime),
       ),
+      el('label', {}, '學季第一週的日期（那一週的任何一天都可以）'), quarterStart,
+      el('p', { class: 'muted' }, '一個學季 10 週。系統會算出這週是第幾週，自動填年級範圍：第 1、5、9 週＝小小孩 1-2／大孩子 3-8；其他單週＝1-3／4-8；雙週＝1-3／4-6。'),
       el('label', {}, '舊紀錄（踏查、週會）'), retention,
       el('p', { class: 'muted' }, '每次登入時會自動清掉太舊的紀錄。教學紀錄請記得先複製到學校的檔案裡。'),
     ),
