@@ -39,7 +39,7 @@ export async function renderPublish(root, ctx) {
     if (trip?.texts?.ig) { const b = outputBlock({ title: '📸 Instagram 貼文', text: trip.texts.ig, gated: true }); gated.push(b); social.push(b); }
     const checklist = publishChecklist(open => { gated.forEach(b => b.setGate(open)); copyAll.disabled = !open; });
 
-    body.replaceChildren(
+    body.replaceChildren(...[
       el('div', { class: 'card' },
         el('h2', {}, '📱 LINE 官方帳號（照順序發）'),
         lineBubbles.length ? null : el('p', { class: 'muted' }, '這週還沒有可以發的內容。先到「週會」或「踏查」產生文案。'),
@@ -58,7 +58,7 @@ export async function renderPublish(root, ctx) {
         ),
         el('p', { class: 'muted' }, '🔜 第 2 階段：確認後自動發送到 LINE 官方帳號和 FB 粉專（需要先申請帳號設定，到時候會一步一步教你）。'),
       ),
-    );
+    ].filter(Boolean));
   }
 
   const st = ctx.settings || {};
@@ -70,7 +70,7 @@ export async function renderPublish(root, ctx) {
         `　還有 ${mins >= 60 * 24 ? `${Math.floor(mins / 1440)} 天 ` : ''}${Math.floor((mins % 1440) / 60)} 小時 ${mins % 60} 分。可以先準備好，時間到再發。`)
     : el('div', { class: 'notice ok schedule' }, '⏰ 本週發送時間：', el('strong', {}, formatDateTime(sendAt)), '　已經到了，老師確認後就可以發送。');
 
-  root.replaceChildren(
+  root.replaceChildren(...[
     el('h1', {}, '📤 本週發送'),
     sched,
     el('p', { class: 'muted' }, `照你們 LINE 實際的順序：週會 → 踏查 → 照片。每週${weekdayName(st.sendWeekday ?? 2)} ${st.sendTime || '17:00'} 發送，發送前老師一定要確認過。`),
@@ -81,7 +81,7 @@ export async function renderPublish(root, ctx) {
       ),
     ),
     body,
-  );
+  ].filter(Boolean));
   draw();
 }
 

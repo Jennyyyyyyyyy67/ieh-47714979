@@ -31,7 +31,14 @@ async function mockGemini(page) {
     const images = body.contents[0].parts.filter(p => p.inline_data).length;
     geminiCalls.push({ text, images, key: req.headers()['x-goog-api-key'] });
     let out;
-    if (text.includes('逐張看照片')) {
+    if (text.includes('請判斷每位學生這一題')) {
+      const lines = [...text.matchAll(/^(S\d+)：(.*)$/gm)];
+      out = { results: lines.map(([, id, ans]) => ({
+        id,
+        verdict: /分類/.test(ans) ? '對' : /顏色/.test(ans) ? '錯' : '部分對',
+        reason: /分類/.test(ans) ? '說出分類方法' : '方向對但不完整',
+      })) };
+    } else if (text.includes('逐張看照片')) {
       out = { photos: [
         { index: 1, seen: '孩子們在書架前找書', highlights: ['用分類號找書'], uncertain: ['看不出是哪一區'], privacy: [] },
         { index: 2, seen: '大家在館外合照', highlights: [], uncertain: ['無'], privacy: ['可看見清楚正臉'] },
@@ -65,6 +72,11 @@ async function makeJpeg(page, w, h, color) {
   return Buffer.from(b64, 'base64');
 }
 
+async function pickRole(p, label) {
+  await p.waitForSelector('text=你是哪一位老師？');
+  await p.click(`.role-card:has-text("${label}")`);
+}
+
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
 const page = await context.newPage();
@@ -78,6 +90,7 @@ await step('註冊老師 A 並登入', async () => {
   await page.fill('input[type=email]', 'teacherA@example.com');
   await page.fill('input[type=password]', 'secret123');
   await page.click('text=第一次使用：註冊');
+  await pickRole(page, '主要老師');
   await page.waitForSelector('text=⚙️ 設定');
   assert.ok(await page.isVisible('text=本機試用模式'));
 });
@@ -397,11 +410,66 @@ await step('模型下架：產生文案時自動改用 Google 建議的新模型
   assert.equal(await page.inputValue('input[list=modelList]'), 'gemini-3.8-flash');
 });
 
+await step('批改老師：註冊時選「1-2年級批改老師」，只看到答案批改和設定', async () => {
+  await page.click('text=登出');
+  await page.fill('input[type=email]', 'grader12@example.com');
+  await page.fill('input[type=password]', 'secret999');
+  await page.click('text=第一次使用：註冊');
+  await pickRole(page, '1-2年級批改老師');
+  await page.waitForSelector('text=⚙️ 設定');
+  const tabs = await page.locator('.tabs button').allTextContents();
+  assert.deepEqual(tabs, ['📝 答案批改', '⚙️ 設定']);
+  assert.ok(await page.isVisible('text=1-2年級批改老師'));
+  assert.ok(!(await page.isVisible('text=⛪ 週會')), '批改老師不用看週會設定');
+});
+
+await step('批改老師：AI 批改簡答題（不送學生名字）、可略過感想題、可點符號改判', async () => {
+  await page.fill('input[placeholder*="AI Studio"]', 'FAKE-KEY-G12');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+  await page.click('.tabs >> text=📝 答案批改');
+  await page.waitForSelector('h1:has-text("📝 1-2年級答案批改")');
+  assert.ok(!(await page.isVisible('text=學生名單（用來找出誰沒交）')), '批改老師不用貼名單');
+  assert.ok(!(await page.textContent('main')).includes('null'), '畫面不能出現 null');
+  const csv = '時間戳記,你的名字,圖書館的書是怎麼排的？,今天最喜歡什麼？\n'
+    + '2026/11/17 下午 5:05:00,小美同學,用分類號排,看繪本\n'
+    + '2026/11/17 下午 5:06:00,小明同學,依顏色排,交換書\n'
+    + '2026/11/17 下午 5:07:00,小華同學,照大小,看繪本\n';
+  await page.setInputFiles('input[type=file][accept*=csv]', { name: '1-2年級問卷.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await page.waitForSelector('text=共 3 筆回覆');
+  // 沒有表單分數時，「設定正確答案」本來就是打開的
+  assert.ok(await page.isVisible('label:has-text("這題不批改") >> nth=1'));
+  await page.click('label:has-text("這題不批改") >> nth=1');
+  assert.ok(await page.isChecked('label:has-text("這題不批改") >> nth=1 >> input'));
+  const before = geminiCalls.length;
+  await page.click('button:has-text("🤖 用 AI 批改")');
+  await page.waitForSelector('text=AI 批改完成');
+  const calls = geminiCalls.slice(before);
+  assert.equal(calls.length, 1, '只批改沒被略過的那一題');
+  assert.ok(calls[0].text.includes('S1：用分類號排'));
+  assert.ok(!/小美|小明|小華/.test(calls[0].text), 'AI 不能看到學生名字');
+  assert.ok(calls[0].text.includes('1-2年級'));
+  const row = name => page.locator('tr', { hasText: name });
+  assert.ok((await row('小美同學').textContent()).includes('①✅'));
+  assert.ok((await row('小明同學').textContent()).includes('①❌'));
+  assert.ok((await row('小華同學').textContent()).includes('①🟡'));
+  assert.ok(!(await row('小美同學').textContent()).includes('②'), '感想題不批改');
+  const sum = await page.textContent('.bubble');
+  assert.ok(sum.includes('1/3 答對'), sum);
+  assert.ok(sum.includes('答對不到六成的學生（2）'), sum);
+  // 老師覺得小華其實答對了：點一下 🟡 → ❌，再點 → ✅
+  await row('小華同學').locator('button.mark').click();
+  await row('小華同學').locator('button.mark').click();
+  assert.ok((await row('小華同學').textContent()).includes('①✅'));
+  assert.ok((await page.textContent('.bubble')).includes('2/3 答對'));
+});
+
 await step('不同老師的資料分開', async () => {
   await page.click('text=登出');
   await page.fill('input[type=email]', 'teacherB@example.com');
   await page.fill('input[type=password]', 'secret456');
   await page.click('text=第一次使用：註冊');
+  await pickRole(page, '主要老師');
   await page.waitForSelector('text=⚙️ 設定');
   await page.click('.tabs >> text=🗂️ 紀錄');
   await page.waitForSelector('text=🚌 踏查（0）');
@@ -422,12 +490,14 @@ await step('手機畫面：沒有左右捲動', async () => {
   await mp.fill('input[type=email]', 'm@example.com');
   await mp.fill('input[type=password]', 'secret789');
   await mp.click('text=第一次使用：註冊');
+  await pickRole(mp, '主要老師');
   await mp.waitForSelector('text=⚙️ 設定');
   for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📊 問卷檢查', '🗂️ 紀錄', '⚙️ 設定']) {
     await mp.click(`.tabs >> text=${tab}`);
     await mp.waitForTimeout(150);
     const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 0, `${tab} 有左右捲動 ${overflow}px`);
+    assert.ok(!/null|undefined/.test(await mp.textContent('main')), `${tab} 畫面出現 null/undefined`);
   }
   if (SHOTS) {
     await mp.click('.tabs >> text=🚌 踏查');

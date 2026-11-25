@@ -89,7 +89,7 @@ export async function renderMeeting(root, ctx) {
     ));
   }
 
-  root.replaceChildren(
+  root.replaceChildren(...[
     el('h1', {}, '⛪ 週會家長信'),
     el('div', { class: 'btns', style: 'margin-top:0' },
       el('button', { class: 'btn small', onclick: () => { if (M.transcript && !confirm('要清空，開始新的一週嗎？（已儲存的不會不見）')) return; M = null; renderMeeting(root, ctx); } }, '🆕 開始新的一週'),
@@ -111,7 +111,7 @@ export async function renderMeeting(root, ctx) {
       el('div', { class: 'btns' }, genBtn),
     ),
     resultBox,
-  );
+  ].filter(Boolean));
   updT();
   drawResult();
 }

@@ -130,3 +130,9 @@ table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: 8p
 table.grid th { color: var(--muted); font-weight: 600; white-space: nowrap; }
 .schedule { font-size: 15px; }
 .schedule strong { font-size: 18px; }
+td.marks { white-space: nowrap; }
+button.mark { border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 8px; padding: 4px 6px; margin: 2px; font-size: 14px; cursor: pointer; min-height: 32px; }
+button.mark:hover { border-color: var(--primary); }
+.role-card { display: block; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 12px; padding: 14px 16px; margin: 8px 0; cursor: pointer; font: inherit; }
+.role-card:hover, .role-card.active { border-color: var(--primary); background: var(--primary-soft); }
+.role-card strong { display: block; font-size: 17px; }

@@ -207,3 +207,47 @@ ${MEETING_EXAMPLES[1]}
 ${transcript}`;
   return [{ text }];
 }
+
+// ---------- 4. AI 批改問卷答案 ----------
+export const GRADE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    results: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          id: { type: 'STRING' },
+          verdict: { type: 'STRING', enum: ['對', '部分對', '錯', '無法判斷'] },
+          reason: { type: 'STRING', description: '15 字以內，說明哪裡對或錯' },
+        },
+        required: ['id', 'verdict', 'reason'],
+      },
+    },
+  },
+  required: ['results'],
+};
+
+/** answers：[{id:'S1', answer:'…'}]，只有代號，沒有學生名字 */
+export function gradePrompt({ question, reference, gradeBand, answers }) {
+  const text = `你是國小老師的批改助理，學生是${gradeBand || '國小'}的孩子。請判斷每位學生這一題的答案對不對。
+
+【題目】
+${question}
+
+【參考答案】
+${reference ? reference : '（老師沒有給參考答案。請依題目判斷答案是否正確、合理；如果這題是問感想、沒有標準答案，只要有認真回答題目就算「對」。）'}
+
+【判斷規則】
+- 「對」：意思正確就算對。錯字、注音、口語、同義的說法都可以接受（孩子年紀小，要寬鬆）。
+- 「部分對」：只答對一部分，或方向對但不完整。
+- 「錯」：意思錯誤、答非所問、亂寫。
+- 「無法判斷」：看不懂、或題目本身無法判斷。
+- 選擇題（參考答案是選項）就要選項相同才算對。
+- reason 用 15 字以內、老師一眼看得懂的話，例如「說出分類號的用途」「把焚化廠講成回收場」。
+- 每個 id 都要回答，不要漏掉，也不要自己加 id。
+
+【學生答案】（S 開頭是代號）
+${answers.map(a => `${a.id}：${a.answer}`).join('\n')}`;
+  return [{ text }];
+}

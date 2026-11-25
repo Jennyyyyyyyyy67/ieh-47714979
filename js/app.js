@@ -6,7 +6,7 @@ import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
 import { renderPublish, renderHistory } from './views/publish.js';
 import { renderSettings } from './views/settings.js';
-import { renderSurvey } from './views/survey.js';
+import { renderSurvey, ROLES } from './views/survey.js';
 
 const app = document.getElementById('app');
 const tabsEl = document.getElementById('tabs');
@@ -15,13 +15,15 @@ const banner = document.getElementById('modeBanner');
 const toastEl = document.getElementById('toast');
 
 const TABS = [
-  { key: 'trip', label: '🚌 踏查', render: renderTrip },
-  { key: 'meeting', label: '⛪ 週會', render: renderMeeting },
-  { key: 'publish', label: '📤 本週發送', render: renderPublish },
-  { key: 'survey', label: '📊 問卷檢查', render: renderSurvey },
-  { key: 'history', label: '🗂️ 紀錄', render: renderHistory },
-  { key: 'settings', label: '⚙️ 設定', render: renderSettings },
+  { key: 'trip', label: '🚌 踏查', render: renderTrip, roles: ['main'] },
+  { key: 'meeting', label: '⛪ 週會', render: renderMeeting, roles: ['main'] },
+  { key: 'publish', label: '📤 本週發送', render: renderPublish, roles: ['main'] },
+  { key: 'survey', label: '📊 問卷檢查', helperLabel: '📝 答案批改', render: renderSurvey, roles: ['main', 'g12', 'g38'] },
+  { key: 'history', label: '🗂️ 紀錄', render: renderHistory, roles: ['main'] },
+  { key: 'settings', label: '⚙️ 設定', render: renderSettings, roles: ['main', 'g12', 'g38'] },
 ];
+const myRole = () => ctx.settings?.role || 'main';
+const myTabs = () => TABS.filter(t => t.roles.includes(myRole()));
 
 let toastTimer;
 function toast(msg) {
@@ -41,7 +43,9 @@ const ctx = {
     ctx.current = key; ctx.params = params;
     renderTabs();
     app.replaceChildren(el('p', { class: 'muted center' }, '載入中…'));
-    const tab = TABS.find(t => t.key === key) || TABS[0];
+    const tab = myTabs().find(t => t.key === key) || myTabs()[0];
+    ctx.current = tab.key;
+    renderTabs();
     try {
       await tab.render(app, ctx);
     } catch (e) {
@@ -54,10 +58,10 @@ const ctx = {
 };
 
 function renderTabs() {
-  tabsEl.replaceChildren(...TABS.map(t => el('button', {
+  tabsEl.replaceChildren(...myTabs().map(t => el('button', {
     class: t.key === ctx.current ? 'active' : '',
     onclick: () => ctx.go(t.key),
-  }, t.label)));
+  }, myRole() !== 'main' && t.helperLabel ? t.helperLabel : t.label)));
 }
 
 function renderAuth() {
@@ -106,6 +110,25 @@ async function autoCleanup() {
   if (n) setTimeout(() => toast(`🧹 已自動清除 ${n} 筆超過 ${days} 天的紀錄`), 400);
 }
 
+/** 第一次登入：選擇身分（之後可以在設定改） */
+export function renderRolePicker(onDone) {
+  tabsEl.hidden = true;
+  app.replaceChildren(el('div', { class: 'card auth' },
+    el('h1', {}, '你是哪一位老師？'),
+    el('p', { class: 'muted' }, '選了之後，系統只會顯示你需要的功能。之後可以在「⚙️ 設定」改。'),
+    ...Object.entries(ROLES).map(([key, r]) => el('button', {
+      class: 'role-card',
+      onclick: async () => {
+        ctx.settings = { ...ctx.settings, role: key };
+        await ctx.store.saveSettings(ctx.settings);
+        tabsEl.hidden = false;
+        onDone();
+      },
+    }, el('strong', {}, r.label), el('span', { class: 'muted' }, r.desc))),
+  ));
+}
+ctx.pickRole = () => renderRolePicker(() => ctx.go(ctx.settings.geminiKey ? (myRole() === 'main' ? 'trip' : 'survey') : 'settings'));
+
 async function main() {
   try {
     ctx.store = await createStore();
@@ -131,7 +154,8 @@ async function main() {
       toast(`🔄 Google 換了新模型，已自動改用 ${model}`);
     });
     await autoCleanup();
-    ctx.go(ctx.settings.geminiKey ? 'trip' : 'settings');
+    if (!ctx.settings.role) { ctx.pickRole(); return; }
+    ctx.go(ctx.settings.geminiKey ? (myRole() === 'main' ? 'trip' : 'survey') : 'settings');
   });
 }
 

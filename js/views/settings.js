@@ -2,10 +2,12 @@
 import { el } from '../utils.js';
 import { listModels, DEFAULT_MODEL, pickBestFlash } from '../gemini.js';
 import { spinnerButton } from './common.js';
+import { ROLES } from './survey.js';
 
 export async function renderSettings(root, ctx) {
   const { store, toast } = ctx;
   const s = { ...(ctx.settings || {}) };
+  const isMain = (s.role || 'main') === 'main';
   const key = el('input', { type: 'password', value: s.geminiKey || '', placeholder: '貼上 Google AI Studio 給你的鑰匙', autocomplete: 'off' });
   const show = el('input', { type: 'checkbox' });
   show.addEventListener('change', () => { key.type = show.checked ? 'text' : 'password'; });
@@ -43,11 +45,17 @@ export async function renderSettings(root, ctx) {
     toast('設定已儲存');
   });
 
-  root.replaceChildren(
+  root.replaceChildren(...[
     modelList,
     el('h1', {}, '⚙️ 設定'),
     el('div', { class: 'card' },
-      el('h2', {}, '🤖 Gemini（看照片、寫文案的 AI）'),
+      el('h2', {}, '👤 我的身分'),
+      el('p', {}, el('strong', {}, ROLES[s.role || 'main'].label), el('span', { class: 'muted' }, `　${ROLES[s.role || 'main'].desc}`)),
+      el('div', { class: 'btns', style: 'margin-top:0' }, el('button', { class: 'btn small', onclick: () => ctx.pickRole() }, '換身分')),
+    ),
+    el('div', { class: 'card' },
+      el('h2', {}, isMain ? '🤖 Gemini（看照片、寫文案、批改的 AI）' : '🤖 Gemini（批改答案的 AI）'),
+      isMain ? null : el('p', {}, '每位老師用自己的免費鑰匙，大約 2 分鐘就能申請好。'),
       el('ol', { class: 'muted' },
         el('li', {}, '用 Google 帳號打開 ', el('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'Google AI Studio'), '。'),
         el('li', {}, '按「Create API key（建立 API 金鑰）」，複製那串英文數字。'),
@@ -61,11 +69,11 @@ export async function renderSettings(root, ctx) {
       msg,
       el('div', { class: 'btns' }, testBtn),
     ),
-    el('div', { class: 'card' },
+    !isMain ? null : el('div', { class: 'card' },
       el('h2', {}, '⛪ 週會'),
       el('label', {}, '預設分享的老師'), speaker,
     ),
-    el('div', { class: 'card' },
+    !isMain ? null : el('div', { class: 'card' },
       el('h2', {}, '⏰ 發送時間與清容量'),
       el('div', { class: 'row' },
         el('div', {}, el('label', {}, '每週發送日'), sendWeekday),
@@ -78,5 +86,5 @@ export async function renderSettings(root, ctx) {
       el('div', { class: 'btns', style: 'margin-top:0' }, saveBtn),
       el('p', { class: 'muted' }, `目前模式：${store.mode === 'firebase' ? '正式版（Firebase，換裝置登入也看得到資料）' : '本機試用模式（資料只在這台裝置）'}`),
     ),
-  );
+  ].filter(Boolean));
 }
