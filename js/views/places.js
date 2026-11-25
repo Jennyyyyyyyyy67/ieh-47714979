@@ -142,6 +142,23 @@ export async function renderPlaces(root, ctx) {
   // ---------- 10 週計畫 ----------
   const planBox = el('div');
   const planMsg = el('div');
+  const remindBox = el('div');
+  /** 提醒：下一次踏查如果在 8 天內，還沒決定天氣或還沒預約，就提醒 */
+  function drawRemind() {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const next = (plan?.weeks || []).find(w => new Date(`${w.date}T12:00:00`) >= today);
+    if (!next) { remindBox.replaceChildren(); return; }
+    const days = Math.round((new Date(`${next.date}T12:00:00`) - today) / 86400000);
+    if (days > 8) { remindBox.replaceChildren(); return; }
+    const m = byId();
+    const issues = [];
+    if (!next.chosen) issues.push('還沒決定去天晴或下雨的地點');
+    if (!next.booked) issues.push('還沒標記已預約');
+    const sp = m.get(next.sunnyId), rp = m.get(next.rainyId);
+    remindBox.replaceChildren(el('div', { class: issues.length ? 'notice warn' : 'notice ok' },
+      `📅 下一次踏查：${toROC(next.date)}（二）${days === 0 ? '就是今天' : `，還有 ${days} 天`}。天晴去 ${sp?.name || '（空）'}、下雨去 ${rp?.name || '（空）'}。`,
+      el('div', {}, issues.length ? `⚠️ ${issues.join('、')}。請看天氣預報決定，並先跟對方預約。` : '✅ 已經決定、也預約好了。')));
+  }
   async function savePlan(weeks) { plan = { id: 'current', start, weeks }; await store.save('plans', plan); }
   const autoBtn = el('button', { class: 'btn primary' }, '🗓️ 自動排 10 週');
   autoBtn.addEventListener('click', async () => {
@@ -152,6 +169,7 @@ export async function renderPlaces(root, ctx) {
     drawPlan();
   });
   function drawPlan() {
+    drawRemind();
     if (!plan || !plan.weeks?.length) { planBox.replaceChildren(el('p', { class: 'muted' }, '還沒有排。按上面的「自動排 10 週」。')); return; }
     const m = byId();
     const opts = (cur, only) => [el('option', { value: '' }, '（空）'), ...places.filter(p => !only || only(p)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant')).map(p => el('option', { value: p.id, selected: p.id === cur }, `${typeLabel(p.type).split(' ')[0]} ${p.name}`))];
@@ -160,13 +178,25 @@ export async function renderPlaces(root, ctx) {
       const rainy = el('select', {}, ...opts(w.rainyId, rainSafe));
       sunny.addEventListener('change', async () => { plan.weeks[i] = { ...w, sunnyId: sunny.value, rainyId: (m.get(sunny.value) && rainSafe(m.get(sunny.value))) ? sunny.value : w.rainyId }; await savePlan(plan.weeks); drawPlan(); });
       rainy.addEventListener('change', async () => { plan.weeks[i] = { ...w, rainyId: rainy.value }; await savePlan(plan.weeks); drawPlan(); });
+      const booked = el('input', { type: 'checkbox', checked: !!w.booked });
+      booked.addEventListener('change', async () => { plan.weeks[i] = { ...w, booked: booked.checked }; await savePlan(plan.weeks); drawPlan(); });
+      const chosen = el('select', {},
+        el('option', { value: '' }, '還沒決定'),
+        el('option', { value: 'sunny', selected: w.chosen === 'sunny' }, '☀️ 決定去天晴的地點'),
+        el('option', { value: 'rainy', selected: w.chosen === 'rainy' }, '☔ 決定去下雨的地點'));
+      chosen.addEventListener('change', async () => { plan.weeks[i] = { ...w, chosen: chosen.value }; await savePlan(plan.weeks); drawPlan(); });
+      const goPlace = m.get(w.chosen === 'rainy' ? w.rainyId : w.chosen === 'sunny' ? w.sunnyId : '');
       const sp = m.get(w.sunnyId);
       const stale = sp && lastVisit(sp) ? `（上次 ${toROC(lastVisit(sp))}）` : (sp ? '（沒去過）' : '');
       return el('div', { class: 'topic plan-row' },
         el('div', { class: 'title' }, `第 ${w.week} 週　${toROC(w.date)}（二）`),
         el('div', { class: 'row' },
           el('div', {}, el('label', {}, '☀️ 天晴去'), sunny, el('div', { class: 'muted' }, stale)),
-          el('div', {}, el('label', {}, '☔ 下雨去（室內）'), rainy)));
+          el('div', {}, el('label', {}, '☔ 下雨去（室內）'), rainy)),
+        el('div', { class: 'row', style: 'margin-top:8px' },
+          el('div', {}, el('label', {}, '📅 前一週看天氣預報後決定'), chosen),
+          el('div', {}, el('label', { class: 'inline', style: 'margin-top:28px' }, booked, el('span', {}, '📞 已經預約／確認好了')))),
+        goPlace ? el('div', { class: w.booked ? 'notice ok' : 'notice warn' }, `${w.chosen === 'rainy' ? '☔' : '☀️'} 決定去：${goPlace.name}（${TYPES[goPlace.type]?.label || '室內外'}）${w.booked ? '　✅ 已預約' : '　⚠️ 還沒標記已預約'}`) : null);
     });
     planBox.replaceChildren(...rows);
   }
@@ -200,9 +230,9 @@ export async function renderPlaces(root, ctx) {
       bulk, bulkMsg, el('div', { class: 'btns' }, addBulk)),
     el('div', { class: 'card' },
       el('h2', {}, '🗓️ 這個學季的 10 週計畫'),
-      el('p', { class: 'muted' }, `從 ${toROC(tripDates(start)[0])} 開始，共 10 個週二。規則：沒去過的、最久沒去的優先；晴天地點不重複；室外不連續超過 2 週；下雨的備案一定是室內。每週都可以自己改。`),
+      el('p', { class: 'muted' }, `從 ${toROC(tripDates(start)[0])} 開始，共 10 個週二。規則：沒去過的、最久沒去的優先；晴天地點不重複；室外不連續超過 2 週；下雨的備案一定是室內。每週都可以自己改。前一週看天氣預報、先預約好之後，在那一週選「決定去哪個」並勾「已預約」。`),
       el('div', { class: 'btns', style: 'margin-top:0' }, autoBtn, copyPlan),
-      planMsg, planBox),
+      remindBox, planMsg, planBox),
   ].filter(Boolean));
   drawList(); drawPlan();
 }

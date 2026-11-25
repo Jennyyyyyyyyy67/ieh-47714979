@@ -122,9 +122,16 @@ export async function renderTrip(root, ctx) {
     schedule: el('textarea', { placeholder: '把行程表、學習單的文字貼在這裡。\n例如：\n09:00 出發\n09:30 主題書區導覽\n10:30 用分類號找書、交換閱讀\n11:30 學習單分享', style: 'min-height:160px' }),
   };
   f.schedule.value = S.scheduleText;
-  f.date.addEventListener('change', () => { S.date = f.date.value; applyWeekRanges(true); drawPlaceHint(); drawSurveyTitles(); });
+  f.date.addEventListener('change', () => { S.date = f.date.value; applyWeekRanges(true); autoFillPlace(); drawPlaceHint(); drawSurveyTitles(); });
   const placeHint = el('div', { class: 'muted' });
   const placeList = el('datalist', { id: 'placeList' }, ...places.map(p => el('option', { value: p.name }, typeLabel(p.type))));
+  /** 計畫裡這一天已經決定好去哪裡，就先填進來（不會蓋掉老師自己打的） */
+  function autoFillPlace() {
+    const w = plan?.weeks?.find(x => x.date === S.date);
+    const id = w?.chosen === 'rainy' ? w.rainyId : w?.chosen === 'sunny' ? w.sunnyId : '';
+    const p = places.find(x => x.id === id);
+    if (p && !f.place.value.trim()) { f.place.value = p.name; S.place = p.name; }
+  }
   function drawPlaceHint() {
     const hit = findPlace(places, f.place.value);
     const planWeek = plan?.weeks?.find(w => w.date === S.date);
@@ -132,6 +139,10 @@ export async function renderTrip(root, ctx) {
     const nodes = [];
     if (hit) nodes.push(el('div', { class: hit.visits?.length ? 'notice warn' : 'notice ok' }, `📍 ${typeLabel(hit.type)}｜${visitSummary(hit)}`));
     else if (f.place.value.trim()) nodes.push(el('div', { class: 'muted' }, '這個地點還不在地點庫裡，產生文案時會自動加進去（室內外要到「📍 踏查地點」補）。'));
+    if (planWeek?.chosen) {
+      const cp = pm.get(planWeek.chosen === 'rainy' ? planWeek.rainyId : planWeek.sunnyId);
+      if (cp) nodes.push(el('div', { class: planWeek.booked ? 'notice ok' : 'notice warn' }, `前一週已決定：${planWeek.chosen === 'rainy' ? '☔ 下雨' : '☀️ 天晴'}去「${cp.name}」${planWeek.booked ? '（✅ 已預約）' : '（⚠️ 還沒標記已預約）'}`));
+    }
     if (planWeek) {
       const mk = (label, id) => { const p = pm.get(id); return p ? el('button', { class: 'btn small', onclick: () => { f.place.value = p.name; S.place = p.name; drawPlaceHint(); drawSurveyTitles(); } }, `${label} ${p.name}`) : null; };
       nodes.push(el('div', { class: 'btns', style: 'margin-top:6px' }, el('span', { class: 'muted' }, `本週計畫：`), mk('☀️ 天晴', planWeek.sunnyId), planWeek.rainyId !== planWeek.sunnyId ? mk('☔ 下雨', planWeek.rainyId) : null));
@@ -463,5 +474,5 @@ export async function renderTrip(root, ctx) {
     resultBox,
   );
   if (!settings.geminiKey) root.prepend(el('div', { class: 'notice danger' }, '還沒設定 Gemini 鑰匙，AI 功能不能用。', el('button', { class: 'btn small', onclick: () => ctx.go('settings') }, '去設定')));
-  applyWeekRanges(!S.id); drawPlaceHint(); drawDocs(); drawPhotos(); drawReview(); drawSurveyTitles(); drawResult(); updateLocks();
+  applyWeekRanges(!S.id); if (!S.id) autoFillPlace(); drawPlaceHint(); drawDocs(); drawPhotos(); drawReview(); drawSurveyTitles(); drawResult(); updateLocks();
 }

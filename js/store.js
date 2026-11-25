@@ -13,11 +13,11 @@ function firebaseConfigured() {
 function friendlyAuthError(e) {
   const code = e?.code || '';
   const map = {
-    'auth/invalid-email': 'Email 格式不正確',
-    'auth/email-already-in-use': '這個 Email 已經註冊過了，請直接登入',
+    'auth/invalid-email': '帳號格式不正確（請用英文或數字）',
+    'auth/email-already-in-use': '這個帳號已經註冊過了，請直接按「登入」',
     'auth/weak-password': '密碼太短，至少要 6 個字',
-    'auth/invalid-credential': 'Email 或密碼錯誤',
-    'auth/wrong-password': 'Email 或密碼錯誤',
+    'auth/invalid-credential': '帳號或密碼錯誤',
+    'auth/wrong-password': '帳號或密碼錯誤',
     'auth/user-not-found': '找不到這個帳號，請先註冊',
     'auth/too-many-requests': '嘗試太多次了，請稍後再試',
     'auth/network-request-failed': '網路連線失敗，請檢查網路',
@@ -49,10 +49,10 @@ class LocalStore {
   _emit() { this.listeners.forEach(cb => cb(this.user)); }
   async signUp(email, password) {
     email = (email || '').trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Email 格式不正確');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('帳號格式不正確（請用英文或數字）');
     if ((password || '').length < 6) throw new Error('密碼太短，至少要 6 個字');
     const users = this._read('users', {});
-    if (users[email]) throw new Error('這個 Email 已經註冊過了，請直接登入');
+    if (users[email]) throw new Error('這個帳號已經註冊過了，請直接按「登入」');
     const salt = newId();
     users[email] = { uid: 'local-' + newId(), salt, hash: await sha256(salt + password) };
     this._write('users', users);
@@ -64,7 +64,7 @@ class LocalStore {
     email = (email || '').trim().toLowerCase();
     const users = this._read('users', {});
     const u = users[email];
-    if (!u || u.hash !== await sha256(u.salt + password)) throw new Error('Email 或密碼錯誤');
+    if (!u || u.hash !== await sha256(u.salt + password)) throw new Error('帳號或密碼錯誤');
     this.user = { uid: u.uid, email };
     this._write('session', this.user);
     this._emit();

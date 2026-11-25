@@ -1,6 +1,6 @@
 // 主程式：登入、分頁切換
 import { createStore } from './store.js';
-import { el } from './utils.js';
+import { el, toLoginEmail } from './utils.js';
 import { setModelUpgradeHandler } from './gemini.js';
 import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
@@ -72,32 +72,30 @@ function renderTabs() {
 function renderAuth() {
   tabsEl.hidden = true;
   whoEl.replaceChildren();
-  const email = el('input', { type: 'email', autocomplete: 'username', placeholder: 'teacher@example.com' });
-  const pw = el('input', { type: 'password', autocomplete: 'current-password', placeholder: '至少 6 個字' });
+  const user = el('input', { type: 'text', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', placeholder: 'teacher' });
+  const pw = el('input', { type: 'password', autocomplete: 'current-password', placeholder: '密碼' });
   const msg = el('div');
   const busy = async (fn) => {
     msg.replaceChildren();
+    if (!user.value.trim()) { msg.replaceChildren(el('div', { class: 'notice danger' }, '請輸入帳號')); return; }
     try { await fn(); }
     catch (e) { msg.replaceChildren(el('div', { class: 'notice danger' }, e.message)); }
   };
   app.replaceChildren(el('div', { class: 'card auth' },
     el('h1', {}, '老師登入'),
     el('p', { class: 'muted' }, '全校老師共用同一組帳號密碼。登入後再選今天要做的工作。'),
-    el('label', {}, 'Email'), email,
+    el('label', {}, '帳號'), user,
     el('label', {}, '密碼'), pw,
     msg,
     el('div', { class: 'btns' },
-      el('button', { class: 'btn primary', onclick: () => busy(() => ctx.store.signIn(email.value, pw.value)) }, '登入'),
-      el('button', { class: 'btn', onclick: () => busy(() => ctx.store.signUp(email.value, pw.value)) }, '第一次使用：註冊'),
+      el('button', { class: 'btn primary', onclick: () => busy(() => ctx.store.signIn(toLoginEmail(user.value), pw.value)) }, '登入'),
     ),
-    el('div', { class: 'btns' },
-      el('button', { class: 'btn small', onclick: () => busy(async () => {
-        await ctx.store.resetPassword(email.value);
-        msg.replaceChildren(el('div', { class: 'notice ok' }, '已寄出重設密碼信，請到信箱收信。'));
-      }) }, '忘記密碼'),
+    el('details', {}, el('summary', {}, '第一次使用、或忘記密碼？'),
+      el('p', { class: 'muted' }, '帳號只要建立一次，由負責的老師處理就好。其他老師直接登入，不用註冊。忘記密碼請找負責的老師。'),
+      el('div', { class: 'btns' }, el('button', { class: 'btn small', onclick: () => busy(() => ctx.store.signUp(toLoginEmail(user.value), pw.value)) }, '建立這個帳號（只有第一次）')),
     ),
   ));
-  pw.addEventListener('keydown', e => { if (e.key === 'Enter') busy(() => ctx.store.signIn(email.value, pw.value)); });
+  pw.addEventListener('keydown', e => { if (e.key === 'Enter') busy(() => ctx.store.signIn(toLoginEmail(user.value), pw.value)); });
 }
 
 // 超過保留天數的踏查、週會紀錄自動刪除（清容量）。

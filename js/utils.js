@@ -309,3 +309,12 @@ export function weekRanges(n) {
   if (n % 4 === 1) return { small: '1-2', big: '3-8' };
   return n % 2 === 1 ? { small: '1-3', big: '4-8' } : { small: '1-3', big: '4-6' };
 }
+
+// ---------- 帳號登入 ----------
+
+/** 老師打 `teacher` 就好，系統在背後補成 Email。有 @ 的就照原樣用（大小寫和前後空白不影響）。 */
+export function toLoginEmail(input) {
+  const v = String(input || '').trim().toLowerCase();
+  if (!v) return '';
+  return v.includes('@') ? v : `${v.replace(/\s+/g, '')}@trip-helper.example`;
+}

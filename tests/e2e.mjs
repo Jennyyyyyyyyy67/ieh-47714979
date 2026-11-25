@@ -90,9 +90,9 @@ await mockGemini(page);
 await page.goto(BASE);
 
 await step('註冊老師 A 並登入', async () => {
-  await page.fill('input[type=email]', 'teacherA@example.com');
+  await page.fill('input[autocomplete=username]', 'teacherA@example.com');
   await page.fill('input[type=password]', 'secret123');
-  await page.click('text=第一次使用：註冊');
+  await page.click('summary:has-text(\"第一次使用\")'); await page.click('button:has-text(\"建立這個帳號\")');
   await pickRole(page, '踏查、週會、發送');
   await page.waitForSelector('text=⚙️ 設定');
   assert.ok(await page.isVisible('text=本機試用模式'));
@@ -103,15 +103,15 @@ await step('密碼太短會被擋下', async () => {
   await p2.goto(BASE);
   // 同一個瀏覽器已登入，先登出
   if (await p2.isVisible('text=登出')) { await p2.click('text=登出'); }
-  await p2.fill('input[type=email]', 'x@example.com');
+  await p2.fill('input[autocomplete=username]', 'x@example.com');
   await p2.fill('input[type=password]', '123');
-  await p2.click('text=第一次使用：註冊');
+  await p2.click('summary:has-text(\"第一次使用\")'); await p2.click('button:has-text(\"建立這個帳號\")');
   await p2.waitForSelector('text=密碼太短');
   await p2.close();
   await page.reload();
   // 被另一頁登出了，重新登入
   if (await page.isVisible('text=老師登入')) {
-    await page.fill('input[type=email]', 'teacherA@example.com');
+    await page.fill('input[autocomplete=username]', 'teacherA@example.com');
     await page.fill('input[type=password]', 'secret123');
     await page.click('button:has-text("登入")');
   }
@@ -594,8 +594,8 @@ await step('踏查地點：新增、一次貼上、搜尋（打名字知道什�
 await step('踏查地點：自動排 10 週，晴天不重複、雨天一定是室內', async () => {
   await page.click('text=🗓️ 自動排 10 週');
   await page.waitForSelector('text=第 10 週');
-  assert.equal(await page.locator('.plan-row select').count(), 20);
-  const rows = await page.$$eval('.plan-row', els => els.map(e => [...e.querySelectorAll('select')].map(s => s.selectedOptions[0].textContent)));
+  assert.equal(await page.locator('.plan-row select').count(), 30);
+  const rows = await page.$$eval('.plan-row', els => els.map(e => [...e.querySelectorAll('select')].slice(0, 2).map(s => s.selectedOptions[0].textContent)));
   assert.equal(rows.length, 10);
   const sunny = rows.map(r => r[0]);
   assert.equal(new Set(sunny).size, 10, '晴天地點不重複：' + sunny);
@@ -643,21 +643,79 @@ await step('踏查：行程表自動帶入 13:30 出發／16:00 回青埔；打�
   await page.fill('input[placeholder*="打地點名稱"]', '');
 });
 
+await step('前一週決定：選晴天或雨天＋勾已預約，踏查頁當天自動填好地點', async () => {
+  await page.click('.tabs >> text=📍 踏查地點');
+  await page.waitForSelector('.plan-row');
+  // 第 2 週（11/24）：決定下雨，先不預約 → 提醒
+  const row2 = page.locator('.plan-row').nth(1);
+  const rainyName = await row2.locator('select').nth(1).evaluate(sel => sel.selectedOptions[0].textContent.replace(/^\S+\s/, ''));
+  await row2.locator('select').nth(2).selectOption('rainy');
+  await page.waitForSelector(`.plan-row >> nth=1 >> text=決定去：${rainyName}`);
+  assert.ok((await page.locator('.plan-row').nth(1).textContent()).includes('還沒標記已預約'));
+  await page.locator('.plan-row').nth(1).locator('input[type=checkbox]').check();
+  await page.waitForSelector('.plan-row >> nth=1 >> text=✅ 已預約');
+  // 踏查頁：選 11/24，地點自動填好
+  await page.click('.tabs >> text=🚌 踏查');
+  await page.click('text=🆕 開始新的一次');
+  await page.fill('input[type=date] >> nth=0', '2026-11-24');
+  await page.dispatchEvent('input[type=date] >> nth=0', 'change');
+  await page.waitForSelector('text=前一週已決定：☔ 下雨去');
+  assert.equal(await page.inputValue('input[placeholder*="高雄市立圖書館"]'), rainyName);
+  assert.ok((await page.textContent('main')).includes('✅ 已預約'));
+  // 老師自己改的地點，換日期時不會被硬蓋
+  await page.fill('input[placeholder*="高雄市立圖書館"]', '老師自己打的地點');
+  await page.fill('input[type=date] >> nth=0', '2026-12-01');
+  await page.dispatchEvent('input[type=date] >> nth=0', 'change');
+  assert.equal(await page.inputValue('input[placeholder*="高雄市立圖書館"]'), '老師自己打的地點');
+});
+
 await step('不同老師的資料分開', async () => {
   await page.click('text=登出');
-  await page.fill('input[type=email]', 'teacherB@example.com');
+  await page.fill('input[autocomplete=username]', 'teacherB@example.com');
   await page.fill('input[type=password]', 'secret456');
-  await page.click('text=第一次使用：註冊');
+  await page.click('summary:has-text(\"第一次使用\")'); await page.click('button:has-text(\"建立這個帳號\")');
   await pickRole(page, '踏查、週會、發送');
   await page.waitForSelector('text=⚙️ 設定');
   await page.click('.tabs >> text=🗂️ 紀錄');
   await page.waitForSelector('text=🚌 踏查（0）');
   assert.ok(!(await page.isVisible('.tabs >> text=學習主題庫')), '學習主題庫已移除');
   await page.click('text=登出');
-  await page.fill('input[type=email]', 'teacherA@example.com');
+  await page.fill('input[autocomplete=username]', 'teacherA@example.com');
   await page.fill('input[type=password]', 'wrongpass');
   await page.click('button:has-text("登入")');
-  await page.waitForSelector('text=Email 或密碼錯誤');
+  await page.waitForSelector('text=帳號或密碼錯誤');
+});
+
+await step('帳號：只打 teacher 就能註冊與登入（不用 Email、大小寫與空白不影響）', async () => {
+  const p = await context.newPage();
+  await p.goto(BASE);
+  if (await p.isVisible('text=登出')) { await p.click('text=登出'); }
+  await p.fill('input[autocomplete=username]', 'teacher');
+  await p.fill('input[type=password]', 'Fake-Pass-9876');
+  await p.click('summary:has-text("第一次使用")'); await p.click('button:has-text("建立這個帳號")');
+  await pickRole(p, '踏查、週會、發送');
+  await p.waitForSelector('text=⚙️ 設定');
+  await p.click('text=登出');
+  // 大小寫、前後空白都沒關係
+  await p.fill('input[autocomplete=username]', '  Teacher ');
+  await p.fill('input[type=password]', 'Fake-Pass-9876');
+  await p.click('button:has-text("登入")');
+  await p.waitForSelector('text=今天要做什麼工作？');
+  await p.click('text=登出');
+  // 密碼打錯
+  await p.fill('input[autocomplete=username]', 'teacher');
+  await p.fill('input[type=password]', 'wrong-pass');
+  await p.click('button:has-text("登入")');
+  await p.waitForSelector('text=帳號或密碼錯誤');
+  // 不能重複註冊
+  await p.click('summary:has-text("第一次使用")'); await p.click('button:has-text("建立這個帳號")');
+  await p.waitForSelector('text=已經註冊過了');
+  // 沒打帳號
+  await p.fill('input[autocomplete=username]', '');
+  await p.click('button:has-text("登入")');
+  await p.waitForSelector('text=請輸入帳號');
+  assert.ok(!(await p.textContent('main')).includes('Email'), '登入畫面不能再出現 Email 這個字');
+  await p.close();
 });
 
 // 手機畫面
@@ -666,9 +724,9 @@ const mp = await mobile.newPage();
 mp.on('pageerror', e => pageErrors.push(e.message));
 await step('手機畫面：沒有左右捲動', async () => {
   await mp.goto(BASE);
-  await mp.fill('input[type=email]', 'm@example.com');
+  await mp.fill('input[autocomplete=username]', 'm@example.com');
   await mp.fill('input[type=password]', 'secret789');
-  await mp.click('text=第一次使用：註冊');
+  await mp.click('summary:has-text(\"第一次使用\")'); await mp.click('button:has-text(\"建立這個帳號\")');
   await pickRole(mp, '踏查、週會、發送');
   await mp.waitForSelector('text=⚙️ 設定');
   for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📍 踏查地點', '📊 問卷檢查', '📋 本週名單', '🗂️ 紀錄', '⚙️ 設定']) {
