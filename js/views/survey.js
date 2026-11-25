@@ -6,9 +6,9 @@ import { GRADE_SCHEMA, gradePrompt } from '../prompts.js';
 import { spinnerButton } from './common.js';
 
 export const ROLES = {
-  main: { label: '主要老師', desc: '踏查、週會、發送，並確認全校有沒有交問卷', grade: '' },
-  g12: { label: '1-2年級批改老師', desc: '只批改 1-2 年級問卷的答案', grade: '1-2年級' },
-  g38: { label: '3-8年級批改老師', desc: '只批改 3-8 年級問卷的答案', grade: '3-8年級' },
+  main: { label: '🚌 踏查、週會、發送', desc: '寫文案、發送，並確認全校有沒有交問卷', grade: '' },
+  g12: { label: '📝 批改 1-2 年級問卷', desc: '用 AI 檢查 1-2 年級學生有沒有答對', grade: '1-2年級' },
+  g38: { label: '📝 批改 3-8 年級問卷', desc: '用 AI 檢查 3-8 年級學生有沒有答對', grade: '3-8年級' },
 };
 const VERDICT_ICON = { '對': '✅', '部分對': '🟡', '錯': '❌', '無法判斷': '❓', '未作答': '⬜' };
 const VERDICT_CYCLE = ['對', '部分對', '錯'];
@@ -181,7 +181,7 @@ export async function aiGradeFile(file, { apiKey, model, gradeBand, onProgress }
 }
 
 export async function renderSurvey(root, ctx) {
-  const role = ctx.settings?.role || 'main';
+  const role = ctx.role || 'main';
   const isMain = role === 'main';
   const band = ROLES[role]?.grade || '';
   if (!S.deadlineDate) {
@@ -403,6 +403,7 @@ export async function renderSurvey(root, ctx) {
 
   root.replaceChildren(...[
     el('h1', {}, isMain ? '📊 問卷檢查（全校）' : `📝 ${band}答案批改`),
+    !isMain && !ctx.settings?.geminiKey ? el('div', { class: 'notice danger' }, '這個帳號還沒設定 AI 鑰匙。請先切換到「踏查、週會、發送」工作，到「⚙️ 設定」貼上 Gemini 鑰匙。') : null,
     el('div', { class: 'notice ok' }, isMain
       ? '🔒 問卷回覆只在這個畫面裡處理，不會被儲存。用 AI 批改時只送代號和答案，不送名字。名單只有在你按「記住這份名單」時，才會存在你自己的帳號裡。'
       : `🔒 上傳 ${band}問卷的回覆，按「🤖 用 AI 批改」就好。回覆不會被儲存，AI 只看得到代號和答案，看不到學生名字。`),

@@ -1,6 +1,6 @@
 // 主程式：登入、分頁切換
 import { createStore } from './store.js';
-import { el, readInvite } from './utils.js';
+import { el } from './utils.js';
 import { setModelUpgradeHandler } from './gemini.js';
 import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
@@ -20,9 +20,10 @@ const TABS = [
   { key: 'publish', label: '📤 本週發送', render: renderPublish, roles: ['main'] },
   { key: 'survey', label: '📊 問卷檢查', helperLabel: '📝 答案批改', render: renderSurvey, roles: ['main', 'g12', 'g38'] },
   { key: 'history', label: '🗂️ 紀錄', render: renderHistory, roles: ['main'] },
-  { key: 'settings', label: '⚙️ 設定', render: renderSettings, roles: ['main', 'g12', 'g38'] },
+  { key: 'settings', label: '⚙️ 設定', render: renderSettings, roles: ['main'] },
 ];
-const myRole = () => ctx.settings?.role || 'main';
+const myRole = () => ctx.role || 'main';
+const ROLE_KEY = 'tripapp:task';
 const myTabs = () => TABS.filter(t => t.roles.includes(myRole()));
 
 let toastTimer;
@@ -67,7 +68,6 @@ function renderTabs() {
 function renderAuth() {
   tabsEl.hidden = true;
   whoEl.replaceChildren();
-  const invited = ctx.pendingInvite || (() => { try { return sessionStorage.getItem('tripapp:invite'); } catch { return null; } })();
   const email = el('input', { type: 'email', autocomplete: 'username', placeholder: 'teacher@example.com' });
   const pw = el('input', { type: 'password', autocomplete: 'current-password', placeholder: '至少 6 個字' });
   const msg = el('div');
@@ -78,8 +78,7 @@ function renderAuth() {
   };
   app.replaceChildren(el('div', { class: 'card auth' },
     el('h1', {}, '老師登入'),
-    el('p', { class: 'muted' }, '每位老師的資料分開存放，只有自己看得到。'),
-    invited ? el('div', { class: 'notice ok' }, '📩 你是被邀請來的！第一次來請輸入 Email 和密碼，按「第一次使用：註冊」。AI 鑰匙和身分會自動設定好。') : null,
+    el('p', { class: 'muted' }, '全校老師共用同一組帳號密碼。登入後再選今天要做的工作。'),
     el('label', {}, 'Email'), email,
     el('label', {}, '密碼'), pw,
     msg,
@@ -112,47 +111,39 @@ async function autoCleanup() {
   if (n) setTimeout(() => toast(`🧹 已自動清除 ${n} 筆超過 ${days} 天的紀錄`), 400);
 }
 
-/** 第一次登入：選擇身分（之後可以在設定改） */
-export function renderRolePicker(onDone) {
+/** 登入後選「今天要做什麼工作」：只記在這個分頁，關掉或登出就要重選 */
+function renderTaskPicker() {
   tabsEl.hidden = true;
   app.replaceChildren(el('div', { class: 'card auth' },
-    el('h1', {}, '你是哪一位老師？'),
-    el('p', { class: 'muted' }, '選了之後，系統只會顯示你需要的功能。之後可以在「⚙️ 設定」改。'),
+    el('h1', {}, '今天要做什麼工作？'),
+    el('p', { class: 'muted' }, '選了之後只會顯示需要的功能。做完可以按右上角「🔄 切換工作」。'),
     ...Object.entries(ROLES).map(([key, r]) => el('button', {
       class: 'role-card',
-      onclick: async () => {
-        ctx.settings = { ...ctx.settings, role: key };
-        await ctx.store.saveSettings(ctx.settings);
+      onclick: () => {
+        ctx.role = key;
+        try { sessionStorage.setItem(ROLE_KEY, key); } catch { /* 無痕模式也沒關係 */ }
         tabsEl.hidden = false;
-        onDone();
+        renderWho();
+        ctx.go(key === 'main' ? (ctx.settings.geminiKey ? 'trip' : 'settings') : 'survey');
       },
     }, el('strong', {}, r.label), el('span', { class: 'muted' }, r.desc))),
   ));
 }
-ctx.pickRole = () => renderRolePicker(() => ctx.go(ctx.settings.geminiKey ? (myRole() === 'main' ? 'trip' : 'survey') : 'settings'));
 
-// 邀請連結：先記下來並從網址上拿掉（避免被截圖或分享出去），登入後再套用
-function captureInvite() {
-  const inv = readInvite(location.hash);
-  if (!inv) return;
-  try { sessionStorage.setItem('tripapp:invite', JSON.stringify(inv)); } catch { /* 無痕模式也沒關係 */ }
-  ctx.pendingInvite = inv;
-  history.replaceState(null, '', location.pathname + location.search);
+function clearTask() {
+  ctx.role = null;
+  try { sessionStorage.removeItem(ROLE_KEY); } catch { /* ignore */ }
 }
-async function applyInvite() {
-  let inv = ctx.pendingInvite;
-  if (!inv) { try { inv = JSON.parse(sessionStorage.getItem('tripapp:invite') || 'null'); } catch { inv = null; } }
-  if (!inv) return false;
-  ctx.settings = { ...ctx.settings, geminiKey: inv.key, model: inv.model || ctx.settings.model, role: inv.role || ctx.settings.role, sharedKey: true };
-  await ctx.store.saveSettings(ctx.settings);
-  ctx.pendingInvite = null;
-  try { sessionStorage.removeItem('tripapp:invite'); } catch { /* ignore */ }
-  setTimeout(() => toast('🎉 已經幫你設定好 AI 鑰匙和身分，可以直接開始了'), 300);
-  return true;
+
+function renderWho() {
+  whoEl.replaceChildren(...[
+    ctx.role ? el('span', {}, ROLES[ctx.role].label) : null,
+    ctx.role ? el('button', { class: 'btn small', onclick: () => { clearTask(); renderWho(); renderTaskPicker(); } }, '🔄 切換工作') : null,
+    el('button', { class: 'btn small', onclick: () => { clearTask(); ctx.store.signOut(); } }, '登出'),
+  ].filter(Boolean));
 }
 
 async function main() {
-  captureInvite();
   try {
     ctx.store = await createStore();
   } catch (e) {
@@ -165,21 +156,19 @@ async function main() {
   }
   ctx.store.onAuth(async user => {
     if (!user) { renderAuth(); return; }
-    whoEl.replaceChildren(
-      el('span', {}, user.email),
-      el('button', { class: 'btn small', onclick: () => ctx.store.signOut() }, '登出'),
-    );
+    try { ctx.role = sessionStorage.getItem(ROLE_KEY) || null; } catch { ctx.role = null; }
+    if (ctx.role && !ROLES[ctx.role]) ctx.role = null;
+    renderWho();
     tabsEl.hidden = false;
     await ctx.reloadSettings();
-    await applyInvite();
     setModelUpgradeHandler(async (model) => {
       ctx.settings = { ...ctx.settings, model };
       await ctx.store.saveSettings(ctx.settings);
       toast(`🔄 Google 換了新模型，已自動改用 ${model}`);
     });
     await autoCleanup();
-    if (!ctx.settings.role) { ctx.pickRole(); return; }
-    ctx.go(ctx.settings.geminiKey ? (myRole() === 'main' ? 'trip' : 'survey') : 'settings');
+    if (!ctx.role) { renderTaskPicker(); return; }
+    ctx.go(myRole() !== 'main' ? 'survey' : (ctx.settings.geminiKey ? 'trip' : 'settings'));
   });
 }
 
