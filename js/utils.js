@@ -278,3 +278,13 @@ export function parseScore(s) {
   const m = String(s || '').match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
   return m ? { got: Number(m[1]), total: Number(m[2]) } : null;
 }
+
+// ---------- 本週名單 ----------
+
+/** 某一天所在那一週（週一到週日）的「發送日」，回傳 yyyy-mm-dd。同一週的老師不管哪天批改，都會存到同一份名單。 */
+export function weekKey(iso, weekday = 2) {
+  const d = iso ? new Date(`${iso}T12:00:00`) : new Date();
+  const mondayOffset = (d.getDay() + 6) % 7; // 週一 = 0
+  d.setDate(d.getDate() - mondayOffset + ((weekday + 6) % 7));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}

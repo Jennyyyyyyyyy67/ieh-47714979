@@ -414,7 +414,7 @@ await step('共用帳號：按「切換工作」改成批改 1-2 年級，只看
   await page.click('text=🔄 切換工作');
   await pickRole(page, '批改 1-2 年級問卷');
   await page.waitForSelector('h1:has-text("📝 1-2年級答案批改")');
-  assert.deepEqual(await page.locator('.tabs button').allTextContents(), ['📝 答案批改']);
+  assert.deepEqual(await page.locator('.tabs button').allTextContents(), ['📝 答案批改', '📋 本週名單']);
   assert.ok(await page.isVisible('#who >> text=批改 1-2 年級問卷'));
   assert.ok(!(await page.isVisible('text=還沒設定 AI 鑰匙')), '同一個帳號，鑰匙已經有了');
 });
@@ -465,6 +465,50 @@ await step('批改老師：AI 批改簡答題（不送學生名字）、可略�
   assert.ok((await page.textContent('.bubble')).includes('2/3 答對'));
 });
 
+await step('本週名單：1-2年級老師存全對名單', async () => {
+  await page.waitForSelector('text=⭐ 全對的學生（2 人）');
+  assert.equal(await page.inputValue('select >> nth=-1'), '1-2年級', '從檔名自動判斷年級');
+  await page.click('text=💾 把全對名單存進本週名單');
+  await page.waitForSelector('text=已存進本週名單：1-2年級全對 2 人');
+});
+
+await step('本週名單：切換成 3-8年級老師，上一位的檔案不見了；批改後存全對名單', async () => {
+  await page.click('text=🔄 切換工作');
+  await pickRole(page, '批改 3-8 年級問卷');
+  await page.waitForSelector('h1:has-text("📝 3-8年級答案批改")');
+  assert.ok(!(await page.isVisible('text=小美同學')), '切換工作後不能看到上一位老師的回覆');
+  const csv = '時間戳記,你的名字,書怎麼排？\n2026/11/17 下午 6:00:00,大明同學,用分類號\n2026/11/17 下午 6:01:00,大華同學,依顏色\n';
+  await page.setInputFiles('input[type=file][accept*=csv]', { name: '3-8年級問卷.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await page.click('button:has-text("🤖 用 AI 批改")');
+  await page.waitForSelector('text=⭐ 全對的學生（1 人）');
+  await page.click('text=💾 把全對名單存進本週名單');
+  await page.waitForSelector('text=已存進本週名單：3-8年級全對 1 人');
+});
+
+await step('本週名單：主要老師存未填名單，三份自動合併成一份', async () => {
+  await page.click('text=🔄 切換工作');
+  await pickRole(page, '踏查、週會、發送');
+  await page.click('.tabs >> text=📊 問卷檢查');
+  await page.fill('textarea', '姓名\t年級\t班別\n小美同學\t1\t快樂兔\n小明同學\t2\t智慧鹿\n小華同學\t1\t快樂兔\n大明同學\t5\t勇氣虎\n大華同學\t7\t恩典鷹\n沒交甲\t1\t快樂兔\n沒交乙\t6\t忠心象');
+  const csv12 = '時間戳記,你的名字,題\n2026/11/17 下午 5:05:00,小美同學,a\n2026/11/17 下午 5:06:00,小明同學,a\n2026/11/17 下午 5:07:00,小華同學,a\n';
+  const csv38 = '時間戳記,你的名字,題\n2026/11/17 下午 6:00:00,大明同學,a\n2026/11/17 下午 6:01:00,大華同學,a\n';
+  await page.setInputFiles('input[type=file][accept*=csv]', [
+    { name: '1-2年級問卷.csv', mimeType: 'text/csv', buffer: Buffer.from(csv12) },
+    { name: '3-8年級問卷.csv', mimeType: 'text/csv', buffer: Buffer.from(csv38) },
+  ]);
+  await page.waitForSelector('text=未交（2）');
+  await page.click('text=💾 把未填名單存進本週名單');
+  await page.waitForSelector('text=已存進本週名單：未填問卷 2 人');
+  await page.click('.tabs >> text=📋 本週名單');
+  await page.waitForSelector('text=🎉 三份都完成了');
+  const text = await page.textContent('.bubble');
+  assert.ok(text.includes('📝 未填問卷（2 人）'), text);
+  assert.ok(text.includes('・1年級 快樂兔：沒交甲'), text);
+  assert.ok(text.includes('・6年級 忠心象：沒交乙'), text);
+  assert.ok(text.includes('⭐ 1-2年級全對（2 人）') && text.includes('小美同學、小華同學'), text);
+  assert.ok(text.includes('⭐ 3-8年級全對（1 人）') && text.includes('大明同學'), text);
+});
+
 await step('不同老師的資料分開', async () => {
   await page.click('text=登出');
   await page.fill('input[type=email]', 'teacherB@example.com');
@@ -493,7 +537,7 @@ await step('手機畫面：沒有左右捲動', async () => {
   await mp.click('text=第一次使用：註冊');
   await pickRole(mp, '踏查、週會、發送');
   await mp.waitForSelector('text=⚙️ 設定');
-  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📊 問卷檢查', '🗂️ 紀錄', '⚙️ 設定']) {
+  for (const tab of ['🚌 踏查', '⛪ 週會', '📤 本週發送', '📊 問卷檢查', '📋 本週名單', '🗂️ 紀錄', '⚙️ 設定']) {
     await mp.click(`.tabs >> text=${tab}`);
     await mp.waitForTimeout(150);
     const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

@@ -4,7 +4,7 @@ import { FIREBASE_CONFIG } from '../firebase-config.js';
 import { uid as newId, sha256 } from './utils.js';
 
 const FB_VER = '10.12.2';
-const COLLECTIONS = ['trips', 'meetings'];
+const COLLECTIONS = ['trips', 'meetings', 'reports'];
 
 function firebaseConfigured() {
   return !!(FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && !String(FIREBASE_CONFIG.apiKey).startsWith('請'));

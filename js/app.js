@@ -6,7 +6,8 @@ import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
 import { renderPublish, renderHistory } from './views/publish.js';
 import { renderSettings } from './views/settings.js';
-import { renderSurvey, ROLES } from './views/survey.js';
+import { renderSurvey, ROLES, resetSurvey } from './views/survey.js';
+import { renderReport } from './views/report.js';
 
 const app = document.getElementById('app');
 const tabsEl = document.getElementById('tabs');
@@ -19,6 +20,7 @@ const TABS = [
   { key: 'meeting', label: '⛪ 週會', render: renderMeeting, roles: ['main'] },
   { key: 'publish', label: '📤 本週發送', render: renderPublish, roles: ['main'] },
   { key: 'survey', label: '📊 問卷檢查', helperLabel: '📝 答案批改', render: renderSurvey, roles: ['main', 'g12', 'g38'] },
+  { key: 'report', label: '📋 本週名單', render: renderReport, roles: ['main', 'g12', 'g38'] },
   { key: 'history', label: '🗂️ 紀錄', render: renderHistory, roles: ['main'] },
   { key: 'settings', label: '⚙️ 設定', render: renderSettings, roles: ['main'] },
 ];
@@ -103,7 +105,7 @@ async function autoCleanup() {
   if (!days || days <= 0) return;
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   let n = 0;
-  for (const col of ['trips', 'meetings']) {
+  for (const col of ['trips', 'meetings', 'reports']) {
     for (const item of await ctx.store.list(col)) {
       if ((item.createdAt || item.updatedAt || Date.now()) < cutoff) { await ctx.store.remove(col, item.id); n++; }
     }
@@ -132,6 +134,7 @@ function renderTaskPicker() {
 
 function clearTask() {
   ctx.role = null;
+  resetSurvey();
   try { sessionStorage.removeItem(ROLE_KEY); } catch { /* ignore */ }
 }
 

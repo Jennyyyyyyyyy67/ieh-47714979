@@ -4,6 +4,7 @@ import { el, parseCSV, normName, parseFormTimestamp, parseScore, todayISO, copyT
 import { callGemini, DEFAULT_MODEL } from '../gemini.js';
 import { GRADE_SCHEMA, gradePrompt } from '../prompts.js';
 import { spinnerButton } from './common.js';
+import { saveReportPart } from './report.js';
 
 export const ROLES = {
   main: { label: '🚌 踏查、週會、發送', desc: '寫文案、發送，並確認全校有沒有交問卷', grade: '' },
@@ -15,7 +16,17 @@ const VERDICT_CYCLE = ['對', '部分對', '錯'];
 const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
 const qLabel = (n) => CIRCLED[n] || `(${n + 1})`;
 
+/** 全對：自己批改的題目全部「對」；沒有批改題目時，看 Google 表單分數是不是滿分 */
+export function isPerfect(r) {
+  if (r.total) return r.right === r.total;
+  if (r.formScore) return r.formScore.total > 0 && r.formScore.got === r.formScore.total;
+  return false;
+}
+const guessBand = (name) => (/1\s*[-~～－]\s*2/.test(name) ? '1-2年級' : /3\s*[-~～－]\s*8/.test(name) ? '3-8年級' : '');
+
 const S = { roster: '', deadlineDate: '', deadlineTime: '23:59', files: [] };
+/** 切換工作或登出時清空（下一位老師不會看到上一位上傳的回覆） */
+export function resetSurvey() { S.roster = ''; S.deadlineDate = ''; S.files = []; }
 
 const ID_HINTS = ['姓名', '名字', '學生', 'name', '座號'];
 const TS_HINTS = ['時間戳記', 'timestamp', '時間'];
@@ -254,7 +265,7 @@ export async function renderSurvey(root, ctx) {
         if (SKIP_HINTS.some(k => h.toLowerCase().includes(k))) return;
         keys[i] = '';
       });
-      S.files.push({ name: f.name, headers, rows: rows.slice(1), idCol: idCol < 0 ? 1 : idCol, tsCol, scoreCol, keys });
+      S.files.push({ name: f.name, headers, rows: rows.slice(1), idCol: idCol < 0 ? 1 : idCol, tsCol, scoreCol, keys, band: band || guessBand(f.name) });
     }
     fileInput.value = '';
     draw();
@@ -340,6 +351,20 @@ export async function renderSurvey(root, ctx) {
         `需要再教的題目：${perQ.filter(q => q.n && q.ok / q.n < 0.6).map(q => qLabel(qIndex.get(q.col))).join('、') || '無'}`,
         `答對不到六成的學生（${needHelp.length}）：${needHelp.map(r => r.name).join('、') || '無'}`,
       ].join('\n');
+      const perfect = results.filter(isPerfect);
+      const bandSel = el('select', {},
+        el('option', { value: '' }, '（請選）'),
+        el('option', { value: '1-2年級', selected: f.band === '1-2年級' }, '1-2年級'),
+        el('option', { value: '3-8年級', selected: f.band === '3-8年級' }, '3-8年級'));
+      bandSel.addEventListener('change', () => { f.band = bandSel.value; });
+      const savePerfect = el('button', { class: 'btn primary', onclick: async () => {
+        if (!f.band) { ctx.toast('請先選這份是幾年級的問卷'); return; }
+        if (!results.some(r => r.total || r.formScore)) { ctx.toast('還沒批改：請先按「🤖 用 AI 批改」或填正確答案'); return; }
+        const groupOf = new Map(list.map(st => [st.key, st.group]));
+        await saveReportPart(ctx, S.deadlineDate, f.band === '1-2年級' ? 'perfect12' : 'perfect38',
+          perfect.map(r => ({ name: r.name, group: groupOf.get(r.key) || '' })));
+        ctx.toast(`已存進本週名單：${f.band}全對 ${perfect.length} 人`);
+      } }, '💾 把全對名單存進本週名單');
       return el('div', { class: 'card' },
         el('div', { class: 'output-head' },
           el('h2', {}, `📄 ${f.name}`),
@@ -385,6 +410,12 @@ export async function renderSurvey(root, ctx) {
           el('div', { class: 'bubble' }, gradeSummary),
           el('div', { class: 'btns' }, el('button', { class: 'btn', onclick: async () => ctx.toast(await copyText(gradeSummary) ? '已複製' : '複製失敗') }, '📋 複製批改總結')),
           el('p', { class: 'muted' }, '⚠️ 總結裡有學生名字，只能給老師之間看，不要貼到家長群組。')) : null,
+        el('div', { class: 'card', style: 'background:var(--primary-soft)' },
+          el('h3', { style: 'margin-top:0' }, `⭐ 全對的學生（${perfect.length} 人）`),
+          el('p', {}, perfect.map(r => r.name).join('、') || '（目前沒有）'),
+          el('div', { class: 'row' }, el('div', {}, el('label', {}, '這份是幾年級的問卷？'), bandSel)),
+          el('div', { class: 'btns' }, savePerfect, el('button', { class: 'btn', onclick: () => ctx.go('report') }, '📋 看本週名單')),
+        ),
       );
     });
 
@@ -394,7 +425,15 @@ export async function renderSurvey(root, ctx) {
         list.length ? null : el('div', { class: 'notice warn' }, '還沒貼學生名單，所以只能看已交的人，看不出誰沒交。'),
         el('div', { class: 'bubble' }, summaryText),
         unknown.length ? el('div', { class: 'notice warn' }, `表單裡有 ${unknown.length} 個名字對不到名單（可能打錯字）：${unknown.map(r => r.name).join('、')}`) : null,
-        el('div', { class: 'btns' }, el('button', { class: 'btn primary', onclick: async () => ctx.toast(await copyText(summaryText) ? '已複製' : '複製失敗') }, '📋 複製未交／遲交名單')),
+        el('div', { class: 'btns' },
+          el('button', { class: 'btn primary', onclick: async () => ctx.toast(await copyText(summaryText) ? '已複製' : '複製失敗') }, '📋 複製未交／遲交名單'),
+          el('button', { class: 'btn primary', onclick: async () => {
+            if (!list.length) { ctx.toast('請先上傳學生名單，才知道誰沒交'); return; }
+            await saveReportPart(ctx, S.deadlineDate, 'missing', missing.map(st => ({ name: st.name, group: st.group })));
+            ctx.toast(`已存進本週名單：未填問卷 ${missing.length} 人`);
+          } }, '💾 把未填名單存進本週名單'),
+          el('button', { class: 'btn', onclick: () => ctx.go('report') }, '📋 看本週名單'),
+        ),
         el('p', { class: 'muted' }, '⚠️ 這份名單有學生名字，只能私下提醒，不要貼到家長群組。'),
       ) : null,
       ...fileCards,
