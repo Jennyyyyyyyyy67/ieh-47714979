@@ -35,7 +35,25 @@ function friendlyError(status, bodyText) {
  * parts：[{text}] 或 [{inline_data:{mime_type,data}}]
  * schema：要 Gemini 照這個格式回答（JSON）
  */
+// Google 那邊太擠（5xx）的時候，自動等一下再試，不用老師一直按。
+const RETRY_DELAYS = [2000, 5000, 10000];
+let onRetry = null;
+export function setRetryHandler(fn) { onRetry = fn; }
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 export async function callGemini(opts) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callWithUpgrade(opts);
+    } catch (e) {
+      if (!e.retryable || attempt >= RETRY_DELAYS.length) throw e;
+      if (onRetry) onRetry(attempt + 1, RETRY_DELAYS.length);
+      await sleep(opts.retryDelays?.[attempt] ?? RETRY_DELAYS[attempt]);
+    }
+  }
+}
+
+async function callWithUpgrade(opts) {
   try {
     return await callOnce(opts);
   } catch (e) {
@@ -69,6 +87,7 @@ async function callOnce({ apiKey, model, parts, schema, temperature = 0.4 }) {
     const err = new Error(friendlyError(res.status, text));
     err.status = res.status;
     err.raw = text;
+    err.retryable = res.status >= 500;
     throw err;
   }
   const data = JSON.parse(text);

@@ -669,6 +669,22 @@ await step('前一週決定：選晴天或雨天＋勾已預約，踏查頁當�
   assert.equal(await page.inputValue('input[placeholder*="高雄市立圖書館"]'), '老師自己打的地點');
 });
 
+await step('Gemini 忙不過來（503）：自動重試，最後成功，老師不用重按', async () => {
+  let fails = 0;
+  const handler = async route => {
+    if (route.request().method() === 'POST' && fails < 1) { fails++; return route.fulfill({ status: 503, json: { error: { code: 503, message: 'The model is overloaded.' } } }); }
+    return route.fallback();
+  };
+  await page.route('https://generativelanguage.googleapis.com/**', handler);
+  await page.click('.tabs >> text=⛪ 週會');
+  await page.fill('textarea[placeholder*="逐字稿"]', '今天我們要談感謝與尊重。'.repeat(10));
+  await page.click('text=✨ 整理成家長信');
+  await page.waitForSelector('text=Gemini 現在比較忙，自動重試中');
+  await page.waitForSelector('text=💌 週會家長信', { timeout: 20000 });
+  assert.equal(fails, 1);
+  await page.unroute('https://generativelanguage.googleapis.com/**', handler);
+});
+
 await step('不同老師的資料分開', async () => {
   await page.click('text=登出');
   await page.fill('input[autocomplete=username]', 'teacherB@example.com');

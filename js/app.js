@@ -1,7 +1,7 @@
 // 主程式：登入、分頁切換
 import { createStore } from './store.js';
 import { el, toLoginEmail } from './utils.js';
-import { setModelUpgradeHandler } from './gemini.js';
+import { setModelUpgradeHandler, setRetryHandler } from './gemini.js';
 import { renderTrip } from './views/trip.js';
 import { renderMeeting } from './views/meeting.js';
 import { renderPublish, renderHistory } from './views/publish.js';
@@ -164,6 +164,7 @@ async function main() {
     renderWho();
     tabsEl.hidden = false;
     await ctx.reloadSettings();
+    setRetryHandler((n, total) => toast(`⏳ Gemini 現在比較忙，自動重試中…（第 ${n}/${total} 次）`));
     setModelUpgradeHandler(async (model) => {
       ctx.settings = { ...ctx.settings, model };
       await ctx.store.saveSettings(ctx.settings);
