@@ -9,6 +9,31 @@ const XLSX_LIB = process.env.XLSX_LIB || '';
 const FAKE_ROSTER = process.env.FAKE_ROSTER || '';
 const FAKE_PLACES = process.env.FAKE_PLACES || '';
 import { readFileSync } from 'node:fs';
+// 假的郵差（Google Apps Script）：記住排程，用 JSONP 回答狀態
+const POSTMAN_URL = 'https://script.google.com/macros/s/FAKE_POSTMAN/exec';
+const fakePostman = { job: null, posts: [], secret: 'test-postman-secret-123', fail: false };
+async function mockPostman(p) {
+  await p.route('https://script.google.com/**', async route => {
+    const req = route.request();
+    const u = new URL(req.url());
+    if (req.method() === 'POST') {
+      const b = JSON.parse(req.postData() || '{}');
+      fakePostman.posts.push(b);
+      if (b.secret === fakePostman.secret) {
+        if (b.action === 'schedule') fakePostman.job = { ...b.job, lineCount: b.job.line.length, hasFb: !!b.job.fb, status: 'scheduled', results: {} };
+        if (b.action === 'cancel' && fakePostman.job) fakePostman.job.status = 'cancelled';
+        if (b.action === 'retry' && fakePostman.job) fakePostman.job = { ...fakePostman.job, status: 'sent', sentAt: Date.now(), results: { line: { ok: true, msg: '發給所有好友，2 個泡泡' }, fb: { ok: true, msg: 'FB 粉專已發文' } } };
+      }
+      return route.fulfill({ status: 200, body: '{}' });
+    }
+    const cb = u.searchParams.get('callback');
+    let out;
+    if (u.searchParams.get('secret') !== fakePostman.secret) out = { ok: false, error: '郵差密碼不對。請到網站「設定」重新貼上。' };
+    else if (u.searchParams.get('action') === 'check') out = { ok: true, triggerOn: true, dryRun: false, lineTest: false, line: { ok: true, name: '測試官方帳號', quota: 3000, used: 120, friends: 108 }, fb: { ok: true, name: '測試粉專' } };
+    else out = { ok: true, triggerOn: true, job: fakePostman.job };
+    return route.fulfill({ status: 200, contentType: 'application/javascript', body: `${cb}(${JSON.stringify(out)});` });
+  });
+}
 const results = [];
 const step = async (name, fn) => {
   try { await fn(); results.push(['✅', name]); }
@@ -95,6 +120,7 @@ page.on('pageerror', e => pageErrors.push(e.message));
 let dialogYes = true; // 跳出「確定嗎？」時要按確定還是取消
 page.on('dialog', d => (dialogYes ? d.accept() : d.dismiss()));
 await mockGemini(page);
+await mockPostman(page);
 await page.goto(BASE);
 
 await step('註冊老師 A 並登入', async () => {
@@ -430,6 +456,75 @@ await step('本週發送：顯示每週二 17:00 發送時間', async () => {
   await page.click('.tabs >> text=📤 本週發送');
   const t = await page.textContent('.schedule');
   assert.ok(/本週發送時間：\d+\/\d+（二）17:00/.test(t), t);
+});
+
+await step('自動發送：還沒設定郵差時，只能一鍵複製，確認按鈕不能按', async () => {
+  assert.ok(await page.isVisible('text=還沒設定郵差'));
+  assert.ok(await page.locator('button:has-text("自動發送")').first().isDisabled());
+});
+
+await step('設定：貼上郵差網址和密碼；密碼錯會說明，對了會顯示 LINE 額度和 FB 粉專（不發文）', async () => {
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.fill('input[placeholder*="script.google.com"]', POSTMAN_URL);
+  await page.fill('input[placeholder*="SECRET"]', 'wrong');
+  await page.click('button:has-text("檢查郵差")');
+  await page.waitForSelector('text=郵差密碼不對');
+  await page.fill('input[placeholder*="SECRET"]', fakePostman.secret);
+  await page.click('button:has-text("檢查郵差")');
+  await page.waitForSelector('text=郵差有回應，密碼正確');
+  const t = await page.textContent('main');
+  assert.ok(t.includes('測試官方帳號') && t.includes('已用 120 / 3000 則') && t.includes('約 108 位好友') && t.includes('測試粉專'), t);
+  assert.ok(!fakePostman.posts.length, '檢查時不可以送東西給郵差');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+});
+
+await step('自動發送：勾完 4 項才能按確認；按了交給郵差，排在週二 17:00，狀態顯示「已排好」', async () => {
+  await page.click('.tabs >> text=📤 本週發送');
+  await page.waitForSelector('text=郵差那裡目前沒有排好的發送');
+  const go = page.locator('button:has-text("自動發送")').first();
+  assert.ok(await go.isDisabled());
+  const boxes = page.locator('.checklist input[type=checkbox]');
+  for (let i = 0; i < await boxes.count(); i++) await boxes.nth(i).check();
+  assert.ok(await go.isEnabled());
+  // 老師在發送前改了一個字，郵差要收到改過的版本
+  const ta = page.locator('.output-block textarea').first();
+  await ta.fill((await ta.inputValue()) + '（老師改過）');
+  await go.click();
+  await page.waitForSelector('text=已排好，時間到會自動發送');
+  const p = fakePostman.posts.at(-1);
+  assert.equal(p.action, 'schedule');
+  assert.equal(p.secret, fakePostman.secret);
+  assert.equal(p.job.line.length, 2, '週會＋踏查兩個泡泡');
+  assert.ok(p.job.line[0].endsWith('（老師改過）'));
+  assert.ok(p.job.fb.length > 0, 'FB 貼文');
+  const d = new Date(p.job.sendAt);
+  assert.deepEqual([d.getDay(), d.getHours(), d.getMinutes()], [2, 17, 0], '週二 17:00');
+  assert.ok(d > new Date() && d - new Date() <= 7 * 86400000, '下一個週二 17:00（今天已經過了就排下週）');
+});
+
+await step('自動發送：可以取消；失敗時可以重送', async () => {
+  await page.click('button:has-text("取消這次發送")');
+  await page.waitForSelector('text=已取消');
+  assert.equal(fakePostman.posts.at(-1).action, 'cancel');
+  fakePostman.job = { ...fakePostman.job, status: 'partial', sentAt: 1, results: { line: { ok: true, msg: '發給所有好友，2 個泡泡' }, fb: { ok: false, msg: 'FB 鑰匙（粉專存取權杖）過期或不對' } } };
+  await page.click('button:has-text("重新整理狀態")');
+  await page.waitForSelector('text=只有一部分發送成功');
+  assert.ok((await page.textContent('main')).includes('FB 鑰匙（粉專存取權杖）過期'));
+  await page.click('button:has-text("重送失敗的部分")');
+  await page.waitForSelector('text=✅ 已發送');
+  assert.equal(fakePostman.posts.at(-1).action, 'retry');
+});
+
+await step('自動發送：這週時間過了，可以按「現在馬上發送」補發（會再問一次）', async () => {
+  const now = page.locator('button:has-text("現在馬上發送")');
+  if (!(await now.count())) return; // 今天還沒過週二 17:00 就沒有這個按鈕
+  const t0 = Date.now();
+  await now.click();
+  await page.waitForSelector('text=已排好，時間到會自動發送');
+  const p = fakePostman.posts.at(-1);
+  assert.equal(p.action, 'schedule');
+  assert.ok(Math.abs(p.job.sendAt - t0) < 60000, '現在就發');
 });
 
 await step('問卷檢查：找出未交、遲交、重複、打錯字，並批改答案', async () => {

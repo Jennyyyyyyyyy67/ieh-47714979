@@ -1,6 +1,7 @@
 // 📤 本週發送（照 LINE 實際順序：週會 → 踏查 → 照片）與 🗂️ 紀錄
-import { el, toROC, todayISO, downloadFile, copyText, thisWeekSendTime, formatDateTime, weekdayName } from '../utils.js';
-import { publishChecklist, outputBlock, LINKS } from './common.js';
+import { el, toROC, todayISO, downloadFile, copyText, thisWeekSendTime, formatDateTime, weekdayName, findPII } from '../utils.js';
+import { publishChecklist, outputBlock, LINKS, spinnerButton } from './common.js';
+import { askPostman, tellPostman, STATUS_TEXT } from '../postman.js';
 
 export async function renderPublish(root, ctx) {
   const { store } = ctx;
@@ -17,6 +18,86 @@ export async function renderPublish(root, ctx) {
   const body = el('div');
   tripSel.addEventListener('change', () => { trip = trips.find(t => t.id === tripSel.value) || null; draw(); });
   meetSel.addEventListener('change', () => { meeting = meetings.find(m => m.id === meetSel.value) || null; draw(); });
+
+  const st0 = ctx.settings || {};
+  const postman = { url: (st0.postmanUrl || '').trim(), secret: st0.postmanSecret || '' };
+  /** 🤖 確認後自動發送（交給郵差，時間到送到 LINE 官方帳號和 FB 粉專） */
+  function autoSendCard({ blocks, fbBlock }) {
+    const statusBox = el('div');
+    const msg = el('div');
+    const lineCb = el('input', { type: 'checkbox', checked: blocks.length > 0, disabled: !blocks.length });
+    const fbCb = el('input', { type: 'checkbox', checked: !!fbBlock, disabled: !fbBlock });
+    // 這週的發送時間過了的話，預設排到下週同一時間；也可以選「現在馬上發送」
+    const weekTime = thisWeekSendTime(new Date(), st0.sendWeekday ?? 2, st0.sendTime || '17:00');
+    const passed = weekTime.getTime() <= Date.now();
+    const sendAt = passed ? new Date(weekTime.getTime() + 7 * 86400000) : weekTime;
+    const goBtn = el('button', { class: 'btn primary', disabled: true }, `✅ 確認，${formatDateTime(sendAt)} 自動發送`);
+    const nowBtn = passed ? el('button', { class: 'btn', disabled: true }, '⚡ 確認，現在馬上發送') : null;
+    let gateOpen = false;
+    const refreshGo = () => { const off = !gateOpen || !postman.url || (!lineCb.checked && !fbCb.checked); goBtn.disabled = off; if (nowBtn) nowBtn.disabled = off; };
+    lineCb.addEventListener('change', refreshGo); fbCb.addEventListener('change', refreshGo);
+    const showStatus = (st) => {
+      const j = st?.job;
+      if (!j) { statusBox.replaceChildren(el('p', { class: 'muted' }, '郵差那裡目前沒有排好的發送。')); return; }
+      const r = j.results || {};
+      const parts = [];
+      if (j.lineCount) parts.push(`LINE ${j.lineCount} 則`);
+      if (j.hasFb) parts.push('FB 1 篇');
+      const cls = { sent: 'ok', scheduled: 'warn', partial: 'danger', failed: 'danger' }[j.status] || '';
+      const btns = [];
+      if (j.status === 'scheduled') btns.push(el('button', { class: 'btn small danger', onclick: (e) => act(e.target, 'cancel', '取消中…', s => s.job?.status === 'cancelled') }, '🚫 取消這次發送'));
+      if (j.status === 'partial' || j.status === 'failed') btns.push(el('button', { class: 'btn small', onclick: (e) => act(e.target, 'retry', '重試中…', s => s.job && s.job.status !== 'sending' && s.job.sentAt !== j.sentAt) }, '🔁 重送失敗的部分'));
+      statusBox.replaceChildren(el('div', { class: `notice ${cls}` },
+        el('div', {}, el('strong', {}, STATUS_TEXT[j.status] || j.status), j.dryRun || st.dryRun ? '（測試模式：不會真的發出去）' : '', st.lineTest ? '（LINE 只發給測試的老師）' : ''),
+        el('div', {}, `${j.label || ''}　發送時間：${formatDateTime(new Date(j.sendAt))}　內容：${parts.join('、')}`),
+        r.line ? el('div', {}, `📱 LINE：${r.line.ok ? '✅' : '❌'} ${r.line.msg || ''}`) : null,
+        r.fb ? el('div', {}, `📘 FB：${r.fb.ok ? '✅' : '❌'} ${r.fb.msg || ''}`) : null,
+        r.note ? el('div', {}, r.note) : null,
+        st.triggerOn === false ? el('div', {}, '⚠️ 郵差的鬧鐘還沒設定，時間到不會發。請到 Apps Script 執行一次「安裝」。') : null,
+        btns.length ? el('div', { class: 'btns' }, ...btns) : null));
+    };
+    async function act(btn, action, label, verify, extra) {
+      const done = spinnerButton(btn, label);
+      try { const st = await tellPostman(postman.url, postman.secret, action, extra, { verify }); showStatus(st); msg.replaceChildren(); ctx.toast('郵差收到了'); }
+      catch (e) { msg.replaceChildren(el('div', { class: 'notice danger' }, e.message)); }
+      done();
+    }
+    async function refresh() {
+      if (!postman.url) return;
+      statusBox.replaceChildren(el('p', { class: 'muted' }, '正在問郵差…'));
+      try { showStatus(await askPostman(postman.url, postman.secret)); }
+      catch (e) { statusBox.replaceChildren(el('div', { class: 'notice danger' }, e.message)); }
+    }
+    async function schedule(btn, at) {
+      const line = lineCb.checked ? blocks.map(b => b.getText().trim()).filter(Boolean) : [];
+      const fb = fbCb.checked && fbBlock ? fbBlock.getText().trim() : '';
+      if (!line.length && !fb) { msg.replaceChildren(el('div', { class: 'notice danger' }, '沒有要發送的內容。')); return; }
+      const hits = [...line, fb].flatMap(t => findPII(t));
+      if (hits.length && !confirm(`文案裡可能有個資：${hits.map(h => `「${h.text}」`).join('、')}。確定沒問題、還是要發送嗎？`)) return;
+      if (!at && !confirm('確定要現在馬上發送嗎？郵差 5 分鐘內會送出，家長會馬上收到。')) return;
+      try {
+        const cur = await askPostman(postman.url, postman.secret);
+        if (cur.job?.status === 'scheduled' && !confirm(`郵差那裡已經有一個排好的發送（${cur.job.label || ''}）。要換成這一次的嗎？`)) return;
+      } catch (e) { msg.replaceChildren(el('div', { class: 'notice danger' }, e.message)); return; }
+      const label = [meeting?.letter && lineCb.checked ? `${toROC(meeting.date)}週會` : '', trip ? `${toROC(trip.date)} ${trip.place}` : ''].filter(Boolean).join('＋');
+      const id = `${Date.now()}`;
+      await act(btn, 'schedule', '交給郵差中…', s => s.job?.id === id, { job: { id, label, sendAt: at || Date.now(), line, fb } });
+      refreshGo();
+    }
+    goBtn.addEventListener('click', () => schedule(goBtn, sendAt.getTime()));
+    if (nowBtn) nowBtn.addEventListener('click', () => schedule(nowBtn, 0));
+    const card = el('div', { class: 'card' },
+      el('h2', {}, '🤖 確認後自動發送'),
+      postman.url
+        ? el('p', { class: 'muted' }, `4 項檢查清單勾完後按下面的按鈕，郵差會在 ${formatDateTime(sendAt)} 自動發送。${passed ? `（這週的 ${formatDateTime(weekTime)} 已經過了，所以排到下週；要補發請按「現在馬上發送」。）` : ''}發送前隨時可以取消。照片和 IG 還是要老師用手機自己發。`)
+        : el('div', { class: 'notice warn' }, '還沒設定郵差，所以現在只能用上面的「一鍵複製」。設定方法：到「⚙️ 設定」→「📮 自動發送（郵差）」。'),
+      el('label', { class: 'inline' }, lineCb, el('span', {}, `📱 發到 LINE 官方帳號（${blocks.length} 個泡泡，一次送出）`)),
+      el('label', { class: 'inline' }, fbCb, el('span', {}, '📘 發到 FB 粉專（只有文字，照片請自己補）')),
+      el('div', { class: 'btns' }, goBtn, nowBtn, postman.url ? el('button', { class: 'btn', onclick: refresh }, '🔄 重新整理狀態') : null),
+      msg, statusBox);
+    refresh();
+    return { card, setGate(open) { gateOpen = open; refreshGo(); } };
+  }
 
   function draw() {
     const gated = [];
@@ -35,9 +116,11 @@ export async function renderPublish(root, ctx) {
       ctx.toast(ok ? '已複製（LINE 會變成一個泡泡；想分開發請一則一則複製）' : '複製失敗');
     });
     const social = [];
-    if (trip?.texts?.fb) { const b = outputBlock({ title: '📘 Facebook 貼文', text: trip.texts.fb, gated: true }); gated.push(b); social.push(b); }
+    let fbBlock = null;
+    if (trip?.texts?.fb) { const b = outputBlock({ title: '📘 Facebook 貼文', text: trip.texts.fb, gated: true }); gated.push(b); social.push(b); fbBlock = b; }
     if (trip?.texts?.ig) { const b = outputBlock({ title: '📸 Instagram 貼文', text: trip.texts.ig, gated: true }); gated.push(b); social.push(b); }
-    const checklist = publishChecklist(open => { gated.forEach(b => b.setGate(open)); copyAll.disabled = !open; });
+    const auto = autoSendCard({ blocks, fbBlock });
+    const checklist = publishChecklist(open => { gated.forEach(b => b.setGate(open)); copyAll.disabled = !open; auto.setGate(open); });
 
     body.replaceChildren(...[
       el('div', { class: 'card' },
@@ -56,8 +139,8 @@ export async function renderPublish(root, ctx) {
           el('a', { class: 'btn', href: LINKS.lineManager, target: '_blank', rel: 'noopener' }, '🟢 打開 LINE 官方帳號後台'),
           el('a', { class: 'btn', href: LINKS.businessSuite, target: '_blank', rel: 'noopener' }, '🔵 打開 Business Suite'),
         ),
-        el('p', { class: 'muted' }, '🔜 第 2 階段：確認後自動發送到 LINE 官方帳號和 FB 粉專（需要先申請帳號設定，到時候會一步一步教你）。'),
       ),
+      auto.card,
     ].filter(Boolean));
   }
 
