@@ -23,6 +23,9 @@ async function mockGemini(page) {
     if (url.includes('/models?')) {
       return route.fulfill({ json: { models: ['gemini-3.8-flash', 'gemini-3.8-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-pro'].map(n => ({ name: `models/${n}`, supportedGenerationMethods: ['generateContent'] })) } });
     }
+    if (url.includes('/models/gemini-0-nope-lite:')) {
+      return route.fulfill({ status: 404, json: { error: { code: 404, message: 'models/gemini-0-nope-lite is not found' } } });
+    }
     if (url.includes('/models/gemini-2.5-flash:')) {
       return route.fulfill({ status: 404, json: { error: { code: 404, message: 'This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features and improvements.' } } });
     }
@@ -30,7 +33,7 @@ async function mockGemini(page) {
     const text = body.contents[0].parts.find(p => p.text)?.text || '';
     const images = body.contents[0].parts.filter(p => p.inline_data).length;
     const mimes = body.contents[0].parts.filter(p => p.inline_data).map(p => p.inline_data.mime_type);
-    geminiCalls.push({ text, images, mimes, key: req.headers()['x-goog-api-key'] });
+    geminiCalls.push({ text, images, mimes, key: req.headers()['x-goog-api-key'], model: (url.match(/models\/([^:]+):/) || [])[1] });
     let out;
     if (text.includes('請把這段錄音逐字轉成文字')) {
       out = { transcript: '錄音轉出來的逐字稿：今天老師帶領大家學習感謝與尊重，並且分享了本週的領袖挑戰。' };
@@ -126,6 +129,7 @@ await step('設定 Gemini 鑰匙並檢查', async () => {
   await page.fill('input[placeholder*="AI Studio"]', 'FAKE-KEY-123');
   await page.click('text=🔑 檢查鑰匙');
   await page.waitForSelector('text=鑰匙可以用');
+  assert.equal(await page.inputValue('input[placeholder$="-lite"]'), 'gemini-3.8-flash-lite', '檢查鑰匙時自動找到較快的 lite 模型');
   // 讓「今天」剛好是學季第 2 週（雙週：1-3 / 4-6），測試才不會因為跑的日期不同而變
   const d = new Date(); d.setDate(d.getDate() - 7);
   const startISO = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -222,6 +226,40 @@ await step('同時生成：其中一種失敗，其他的保留並提醒；再�
   assert.equal(geminiCalls.length - before, 4, '再按一次，4 組都重新寫');
   assert.ok((await outText('Facebook 貼文')).length > 0, '再按一次之後 FB 也有了');
   assert.ok(!(await page.isVisible('text=這幾個沒有寫成功')));
+});
+
+await step('⚡ 快速模式：勾起來後文案用 lite 模型寫，選擇會被記住', async () => {
+  await page.check('text=⚡ 快速模式');
+  const before = geminiCalls.length;
+  await page.click('button:has-text("✨ 產生文案")');
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.includes('產生文案')); return b && !b.disabled && b.textContent.trim() === '✨ 產生文案'; });
+  const models = geminiCalls.slice(before).map(c => c.model);
+  assert.equal(models.length, 4);
+  assert.ok(models.every(m => m === 'gemini-3.8-flash-lite'), '全部用快速模型：' + models);
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.click('.tabs >> text=🚌 踏查');
+  assert.ok(await page.isChecked('text=⚡ 快速模式'), '下次打開還是勾著');
+});
+
+await step('⚡ 快速模式：快速模型找不到時，自動改用一般模型，也不會改掉一般模型的設定', async () => {
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.fill('input[placeholder$="-lite"]', 'gemini-0-nope-lite');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+  await page.click('.tabs >> text=🚌 踏查');
+  const before = geminiCalls.length;
+  await page.click('button:has-text("✨ 產生文案")');
+  await page.waitForSelector('text=找不到快速模型「gemini-0-nope-lite」');
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.includes('產生文案')); return b && !b.disabled && b.textContent.trim() === '✨ 產生文案'; });
+  assert.ok(geminiCalls.slice(before).some(c => c.model === 'gemini-3.8-flash'), '改用一般模型');
+  assert.ok((await outText('家長群組溫馨回顧')).startsWith('【戶外踏查】'), '文案照樣有產生');
+  await page.click('.tabs >> text=⚙️ 設定');
+  assert.equal(await page.inputValue('input[list=modelList] >> nth=0'), 'gemini-3.8-flash', '一般模型的設定沒有被改掉');
+  // 恢復：關掉快速模式，讓後面的測試照舊
+  await page.fill('input[placeholder$="-lite"]', 'gemini-3.8-flash-lite');
+  await page.click('text=💾 儲存設定');
+  await page.click('.tabs >> text=🚌 踏查');
+  await page.uncheck('text=⚡ 快速模式');
 });
 
 await step('LINE 版：照範本格式、附問卷連結和 12 點提醒', async () => {

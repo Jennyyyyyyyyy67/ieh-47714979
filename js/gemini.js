@@ -20,6 +20,16 @@ export function pickBestFlash(models) {
   return plain[0] || models.find(n => /flash/.test(n)) || null;
 }
 
+/** 從可用的模型裡，挑最新的「lite」（較快、較省，品質可能稍差） */
+export function pickFastModel(models) {
+  const lite = models.filter(n => /^gemini-[\d.]+-flash-lite$/.test(n));
+  const ver = n => n.match(/^gemini-([\d.]+)-/)[1].split('.').map(Number);
+  lite.sort((a, b) => { const x = ver(a), y = ver(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (y[i] || 0) - (x[i] || 0); } return 0; });
+  return lite[0] || models.find(n => /flash-lite/.test(n)) || null;
+}
+/** 還沒按過「檢查鑰匙」時的猜測：一般模型名稱後面加 -lite */
+export const guessFastModel = (model) => `${(model || DEFAULT_MODEL).replace(/-lite$/, '')}-lite`;
+
 function friendlyError(status, bodyText) {
   let msg = '';
   try { msg = JSON.parse(bodyText)?.error?.message || ''; } catch { msg = bodyText.slice(0, 200); }
@@ -57,7 +67,7 @@ async function callWithUpgrade(opts) {
   try {
     return await callOnce(opts);
   } catch (e) {
-    const next = e.status === 404 ? suggestedModel(e.raw) : null;
+    const next = e.status === 404 && opts.upgrade !== false ? suggestedModel(e.raw) : null;
     if (!next || next === opts.model) throw e;
     const out = await callOnce({ ...opts, model: next });
     if (onModelUpgrade) onModelUpgrade(next);

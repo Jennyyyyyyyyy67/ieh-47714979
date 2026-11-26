@@ -1,6 +1,6 @@
 // ⚙️ 設定：Gemini 鑰匙、模型、預設分享老師
 import { el } from '../utils.js';
-import { listModels, DEFAULT_MODEL, pickBestFlash } from '../gemini.js';
+import { listModels, DEFAULT_MODEL, pickBestFlash, pickFastModel, guessFastModel } from '../gemini.js';
 import { spinnerButton } from './common.js';
 import { PARTS, partLabels } from './report.js';
 import { DEFAULT_QUARTER_START, DEFAULT_DEPART, DEFAULT_RETURN, DEFAULT_RETURN_PLACE } from '../places-logic.js';
@@ -14,6 +14,7 @@ export async function renderSettings(root, ctx) {
   show.addEventListener('change', () => { key.type = show.checked ? 'text' : 'password'; });
   const model = el('input', { type: 'text', value: s.model || DEFAULT_MODEL, list: 'modelList' });
   const modelList = el('datalist', { id: 'modelList' });
+  const fastModel = el('input', { type: 'text', value: s.fastModel || '', list: 'modelList', placeholder: guessFastModel(s.model) });
   const speaker = el('input', { type: 'text', value: s.speaker || '蓓禎老師' });
   const sendWeekday = el('select', {}, ...['日', '一', '二', '三', '四', '五', '六'].map((d, i) => el('option', { value: String(i), selected: i === (s.sendWeekday ?? 2) }, `星期${d}`)));
   const sendTime = el('input', { type: 'time', value: s.sendTime || '17:00' });
@@ -42,6 +43,9 @@ export async function renderSettings(root, ctx) {
         if (best) { note = `✅ 鑰匙可以用。原本的模型「${model.value}」已經沒有了，已自動換成「${best}」，請按「儲存設定」。`; model.value = best; ok = true; }
         else note = `鑰匙可以用，但找不到模型「${model.value}」。請從模型欄位的下拉選單挑一個名字有 flash 的。`;
       }
+      const fast = pickFastModel(models);
+      if (fast) { fastModel.value = fast; note += ` ⚡ 快速模式會用「${fast}」。`; }
+      else note += ' （沒有找到較快的 lite 模型，快速模式會自動改用一般模型。）';
       msg.replaceChildren(el('div', { class: ok ? 'notice ok' : 'notice warn' },
         note,
         el('details', {}, el('summary', {}, `可以用的模型（${models.length}）`), el('div', { class: 'muted' }, models.join('、')))));
@@ -50,7 +54,7 @@ export async function renderSettings(root, ctx) {
   });
   const saveBtn = el('button', { class: 'btn primary' }, '💾 儲存設定');
   saveBtn.addEventListener('click', async () => {
-    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, speaker: speaker.value.trim(), sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value), quarterStart: quarterStart.value || DEFAULT_QUARTER_START,
+    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, fastModel: fastModel.value.trim(), speaker: speaker.value.trim(), sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value), quarterStart: quarterStart.value || DEFAULT_QUARTER_START,
       departTime: departTime.value || DEFAULT_DEPART, returnTime: returnTime.value || DEFAULT_RETURN, returnPlace: returnPlace.value.trim() || DEFAULT_RETURN_PLACE,
       reportLabels: Object.fromEntries(Object.entries(labelInputs).map(([k, v]) => [k, { title: v.title.value, note: v.note.value }])) };
     await store.saveSettings(next);
@@ -73,6 +77,7 @@ export async function renderSettings(root, ctx) {
       el('label', {}, 'Gemini 鑰匙（API key）'), key,
       el('label', { class: 'inline' }, show, el('span', {}, '顯示鑰匙')),
       el('label', {}, '模型名稱'), model,
+      el('label', {}, '⚡ 快速模式用的模型（按「檢查鑰匙」會自動找）'), fastModel,
       el('p', { class: 'muted' }, `預設是 ${DEFAULT_MODEL}。如果以後 Google 改了名字，按「檢查鑰匙」就能看到現在能用哪些。`),
       msg,
       el('div', { class: 'btns' }, testBtn),

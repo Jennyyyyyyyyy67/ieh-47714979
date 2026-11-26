@@ -1,6 +1,6 @@
 // 🚌 每週二踏查：行程表 → 照片 → AI 看照片（老師核對）→ 問卷連結 → 產生文案 → 檢查清單 → 複製
 import { el, todayISO, toROC, surveyTitle, resizeImage, fileToBase64, formatBytes, quarterWeek, weekRanges } from '../utils.js';
-import { callGemini, DEFAULT_MODEL } from '../gemini.js';
+import { callGemini, DEFAULT_MODEL, guessFastModel } from '../gemini.js';
 import { PHOTO_SCHEMA, photoPrompt, tripGroups, tripSchemaFor, tripPrompt } from '../prompts.js';
 import { publishChecklist, outputBlock, spinnerButton } from './common.js';
 import { recordVisit } from './places.js';
@@ -327,6 +327,12 @@ export async function renderTrip(root, ctx) {
     return el('label', { class: 'inline' }, cb, el('span', {}, label));
   });
   const lqCb = el('input', { type: 'checkbox', checked: S.outputs.lineQuestions });
+  // ⚡ 快速模式：用較快的模型（文案品質可能稍差）。選擇會記在帳號設定裡
+  const fastCb = el('input', { type: 'checkbox', checked: !!settings.preferFast });
+  fastCb.addEventListener('change', async () => {
+    settings.preferFast = fastCb.checked;
+    try { await store.saveSettings({ ...settings }); } catch { /* 存不了也沒關係，這次照樣用 */ }
+  });
   lqCb.addEventListener('change', () => { S.outputs.lineQuestions = lqCb.checked; });
   const genBtn = el('button', { class: 'btn primary' }, '✨ 產生文案');
   const genMsg = el('div');
@@ -345,11 +351,22 @@ export async function renderTrip(root, ctx) {
       const photoNotes = S.photoNotes.map((n, i) => `照片${i + 1}：${n.seen}${n.highlights ? `（亮點：${n.highlights}）` : ''}${n.uncertain && n.uncertain !== '無' ? `［不確定：${n.uncertain}］` : ''}`).join('\n');
       // 每一種文案同時請 AI 寫，比一次寫完快；其中一種失敗，其他的還是保留
       const groups = tripGroups(S.outputs);
+      const normalModel = settings.model || DEFAULT_MODEL;
+      const fastModel = settings.fastModel || guessFastModel(normalModel);
+      let useFast = fastCb.checked, fastMissing = false;
+      // 快速模型找不到（404）就改回一般模型，不會因此失敗
+      const ask = async (opts) => {
+        if (useFast) {
+          try { return await callGemini({ ...opts, model: fastModel, upgrade: false }); }
+          catch (e) { if (e.status !== 404) throw e; fastMissing = true; useFast = false; }
+        }
+        return callGemini({ ...opts, model: normalModel });
+      };
       let finished = 0;
       const label = genBtn.lastChild;
       const settled = await Promise.allSettled(groups.map(async g => {
         const parts = tripPrompt({ trip: S, photoNotes, outputs: g.outputs, docParts: docParts() });
-        const out = await callGemini({ apiKey: settings.geminiKey, model: settings.model || DEFAULT_MODEL, parts, schema: tripSchemaFor(g.fields), temperature: 0.6 });
+        const out = await ask({ apiKey: settings.geminiKey, parts, schema: tripSchemaFor(g.fields), temperature: 0.6 });
         finished++;
         if (label) label.textContent = ` AI 正在寫文案…（完成 ${finished}/${groups.length}）`;
         return out;
@@ -370,6 +387,7 @@ export async function renderTrip(root, ctx) {
       S.texts = assembleTexts(S, r);
       S.failedGroups = failed.map(f => f.label);
       if (failed.length) genMsg.replaceChildren(el('div', { class: 'notice warn' }, `⚠️ 這幾個沒有寫成功：${failed.map(f => f.label).join('、')}。其他的已經完成。再按一次「✨ 產生文案」就會全部重寫；${failed[0].message}`));
+      if (fastMissing) genMsg.append(el('div', { class: 'notice warn' }, `⚡ 找不到快速模型「${fastModel}」，這次改用一般模型寫完了。可以到「⚙️ 設定」按「檢查鑰匙」重新找快速模型。`));
       await save();
       // 記進地點庫：這個地點這天去過
       try {
@@ -440,6 +458,8 @@ export async function renderTrip(root, ctx) {
   step6Card.append(
     el('h2', {}, el('span', { class: 'step-num' }, '5'), '要產生哪幾種？'),
     ...outChecks,
+    el('p', { class: 'muted' }, '💡 想快一點：只勾今天要用的版本、照片 3～5 張就好。'),
+    el('label', { class: 'inline' }, fastCb, el('span', {}, '⚡ 快速模式：用較快的模型（文案品質可能稍差，覺得不好可以取消再產生一次）')),
     el('details', {}, el('summary', {}, '進階選項'),
       el('label', { class: 'inline' }, lqCb, el('span', {}, '「回家可以問孩子的問題」也放進 LINE 家長訊息（預設只放在問卷）'))),
     genMsg,
@@ -476,7 +496,7 @@ export async function renderTrip(root, ctx) {
       el('div', { class: 'notice warn' }, '⚠️ 上傳前請先排除「沒有肖像同意」的學生照片。AI 不會、也不可以認人，所以這一步只能靠老師把關。'),
       el('label', { class: 'inline' }, consentCb, el('strong', {}, '我確認：要上傳的照片裡，每一位學生都有肖像同意')),
       el('div', { class: 'btns' }, pickBtn, photoInput),
-      el('p', { class: 'muted' }, `照片會先在你的裝置上自動縮小，並去掉 GPS 位置等隱藏資訊。最多 ${MAX_PHOTOS} 張。`),
+      el('p', { class: 'muted' }, `照片會先在你的裝置上自動縮小，並去掉 GPS 位置等隱藏資訊。最多 ${MAX_PHOTOS} 張，建議 3～5 張就好：照片越少，AI 越快。`),
       photoInfo,
       photoGrid,
     ),
