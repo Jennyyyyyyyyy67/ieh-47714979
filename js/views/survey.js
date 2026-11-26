@@ -59,7 +59,7 @@ function guessCol(headers, hints) {
 const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 
 /** 讀 Excel（.xlsx）第一個工作表，回傳一列一列的陣列 */
-export async function readXlsxRows(file) {
+async function loadXlsxLib() {
   if (!window.XLSX) {
     await new Promise((resolve, reject) => {
       const sc = document.createElement('script');
@@ -68,11 +68,22 @@ export async function readXlsxRows(file) {
       document.head.append(sc);
     });
   }
+}
+export async function readXlsxRows(file) {
+  await loadXlsxLib();
   const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
   const ws = wb.Sheets[wb.SheetNames[0]];
   return window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
     .map(r => r.map(c => String(c ?? '').trim()))
     .filter(r => r.some(Boolean));
+}
+
+/** 讀 Excel 的每一個工作表：{ 工作表名稱: [[…], …] } */
+export async function readXlsxBook(file) {
+  await loadXlsxLib();
+  const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  return Object.fromEntries(wb.SheetNames.map(n => [n, window.XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '', raw: false })
+    .map(r => r.map(c => String(c ?? '').trim())).filter(r => r.some(Boolean))]));
 }
 
 /**

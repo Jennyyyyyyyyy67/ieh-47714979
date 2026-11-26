@@ -1,7 +1,9 @@
 // 📍 踏查地點：地點庫（室內／室外、去過的日期）＋自動排 10 週（晴天、雨天各一個）
 import { el, toROC, copyText } from '../utils.js';
+import { readXlsxBook } from './survey.js';
 import {
-  placeKey, TYPES, typeLabel, rainSafe, parseDates, lastVisit, visitSummary, findPlace, planTen, tripDates,
+  placeKey, TYPES, SEASONS, typeLabel, rainSafe, parseDates, lastVisit, visitSummary, findPlace, planTen, tripDates,
+  quarterOf, seasonOfQuarter, findAnchor,
   DEFAULT_QUARTER_START, DEFAULT_DEPART, DEFAULT_RETURN, DEFAULT_RETURN_PLACE,
 } from '../places-logic.js';
 
@@ -54,7 +56,11 @@ export async function renderPlaces(root, ctx) {
     } }, '＋ 記一次去過');
     return el('div', { class: 'topic' },
       el('div', { class: 'topic-head' },
-        el('div', {}, el('div', { class: 'title' }, p.name), el('span', { class: p.needsType ? 'tag warn' : 'tag' }, typeLabel(p.type)), p.needsType ? el('span', { class: 'tag warn' }, '請確認室內／室外') : null),
+        el('div', {}, el('div', { class: 'title' }, p.name), el('span', { class: p.needsType ? 'tag warn' : 'tag' }, typeLabel(p.type)),
+          p.transport ? el('span', { class: 'tag' }, p.transport === '捷運' ? '🚇 捷運' : '🚌 專車') : null,
+          p.season && SEASONS[p.season] ? el('span', { class: 'tag' }, `${SEASONS[p.season].icon} ${SEASONS[p.season].label}`) : null,
+          p.theme ? el('span', { class: 'tag' }, p.theme) : null,
+          p.needsType ? el('span', { class: 'tag warn' }, '請確認室內／室外') : null),
         el('div', { class: 'btns', style: 'margin:0' }, visited, edit, del)),
       el('div', {}, visitSummary(p)),
       visits.length ? el('div', { class: 'muted' }, '去過的日子：', ...visits.map(v => el('span', { class: 'tag', title: '點一下刪除這一筆', style: 'cursor:pointer', onclick: async () => {
@@ -62,6 +68,7 @@ export async function renderPlaces(root, ctx) {
         await store.save('places', { ...p, visits: (p.visits || []).filter(x => x !== v) });
         await refresh();
       } }, toROC(v)))) : null,
+      p.desc || p.access ? el('div', { class: 'muted' }, [p.access, p.desc].filter(Boolean).join('｜')) : null,
       p.note ? el('div', { class: 'muted' }, `備註：${p.note}`) : null);
   }
 
@@ -69,7 +76,7 @@ export async function renderPlaces(root, ctx) {
     const q = search.value.trim();
     const key = q.toLowerCase();
     const shown = places
-      .filter(p => !q || placeKey(p.name).includes(placeKey(q)) || (p.note || '').toLowerCase().includes(key))
+      .filter(p => !q || placeKey(p.name).includes(placeKey(q)) || [p.note, p.theme, p.desc, p.access].join(' ').toLowerCase().includes(key))
       .sort((a, b) => (lastVisit(b) || '').localeCompare(lastVisit(a) || '') || a.name.localeCompare(b.name, 'zh-Hant'));
     countEl.textContent = `共 ${places.length} 個地點`;
     const exact = q && findPlace(places, q);
@@ -88,14 +95,16 @@ export async function renderPlaces(root, ctx) {
     type: el('select', {}, ...Object.entries(TYPES).map(([k, t]) => el('option', { value: k }, `${t.icon} ${t.label}（${t.note}）`))),
     note: el('input', { type: 'text', placeholder: '（選填）例如：週二有開、要預約、離學校 40 分鐘' }),
     dates: el('input', { type: 'text', placeholder: '（選填）去過的日期，例如：115/9/29、115/10/13' }),
+    transport: el('select', {}, el('option', { value: '' }, '（不確定）'), el('option', { value: '捷運' }, '🚇 捷運可以到'), el('option', { value: '專車' }, '🚌 要坐專車')),
+    season: el('select', {}, el('option', { value: '' }, '（都可以）'), ...Object.entries(SEASONS).map(([k, v]) => el('option', { value: k }, `${v.icon} ${v.label}`))),
   };
   form.type.value = 'indoor';
   const formTitle = el('h2', {}, '➕ 新增地點');
   const cancelBtn = el('button', { class: 'btn', hidden: true }, '取消修改');
   const formMsg = el('div');
-  function resetForm() { editing = null; form.name.value = ''; form.note.value = ''; form.dates.value = ''; form.type.value = 'indoor'; formTitle.textContent = '➕ 新增地點'; cancelBtn.hidden = true; formMsg.replaceChildren(); }
+  function resetForm() { editing = null; form.name.value = ''; form.note.value = ''; form.dates.value = ''; form.type.value = 'indoor'; form.transport.value = ''; form.season.value = ''; formTitle.textContent = '➕ 新增地點'; cancelBtn.hidden = true; formMsg.replaceChildren(); }
   function fillForm(p) {
-    editing = p.id; form.name.value = p.name; form.type.value = p.type || 'mixed'; form.note.value = p.note || '';
+    editing = p.id; form.name.value = p.name; form.type.value = p.type || 'mixed'; form.note.value = p.note || ''; form.transport.value = p.transport || ''; form.season.value = p.season || '';
     form.dates.value = (p.visits || []).map(toROC).join('、'); formTitle.textContent = `✏️ 修改：${p.name}`; cancelBtn.hidden = false;
     formTitle.scrollIntoView({ behavior: 'smooth' });
   }
@@ -109,7 +118,7 @@ export async function renderPlaces(root, ctx) {
     const visits = parseDates(form.dates.value);
     if (form.dates.value.trim() && !visits.length) { formMsg.replaceChildren(el('div', { class: 'notice danger' }, '看不懂去過的日期，請寫成 115/9/29 這樣（多個用頓號分開）')); return; }
     const old = places.find(p => p.id === editing) || {};
-    await store.save('places', { ...old, name, type: form.type.value, note: form.note.value.trim(), visits, needsType: false });
+    await store.save('places', { ...old, name, type: form.type.value, transport: form.transport.value, season: form.season.value, note: form.note.value.trim(), visits, needsType: false });
     toast(editing ? '已修改' : '已新增');
     resetForm();
     await refresh();
@@ -139,6 +148,81 @@ export async function renderPlaces(root, ctx) {
     if (added || merged) { bulk.value = ''; await refresh(); }
   });
 
+  // ---------- 匯入 Excel（整理好的地點檔，也可以有「本季行程」工作表） ----------
+  const importInput = el('input', { type: 'file', accept: '.xlsx,.xls', hidden: true });
+  const importMsg = el('div');
+  const toType = (v) => (/室內外|都有|兩/.test(v) ? 'mixed' : /室內/.test(v) ? 'indoor' : /室外|戶外/.test(v) ? 'outdoor' : '');
+  const toTransport = (v) => (/捷運|輕軌/.test(v) ? '捷運' : /專車|汽車|遊覽車|自車/.test(v) ? '專車' : '');
+  const toSeason = (v) => (/夏|第一|第四/.test(v) ? 'summer' : /秋|冬|第二|第三/.test(v) ? 'winter' : '');
+  function table(rows, must) {
+    const h = rows.findIndex(r => r.some(c => must.test(c)));
+    if (h < 0) return null;
+    const head = rows[h];
+    const col = (re) => head.findIndex(c => re.test(c));
+    return { rows: rows.slice(h + 1), col };
+  }
+  importInput.addEventListener('change', async () => {
+    const f = importInput.files[0];
+    importInput.value = '';
+    if (!f) return;
+    importMsg.replaceChildren(el('div', { class: 'muted' }, '讀取中…'));
+    let book;
+    try { book = await readXlsxBook(f); } catch (e) { importMsg.replaceChildren(el('div', { class: 'notice danger' }, e.message)); return; }
+    const names = Object.keys(book);
+    const placeSheet = names.find(n => /地點/.test(n)) || names[0];
+    const t = table(book[placeSheet] || [], /地點名稱|^地點$/);
+    if (!t) { importMsg.replaceChildren(el('div', { class: 'notice danger' }, '這個檔案找不到「地點名稱」這一欄。')); return; }
+    const c = { name: t.col(/地點名稱|^地點$/), type: t.col(/室內外/), transport: t.col(/^交通$|交通方式/), season: t.col(/學季|季節/), theme: t.col(/主題/),
+      access: t.col(/交通說明|捷運站|怎麼去/), desc: t.col(/特色|參訪型態/), dates: t.col(/去過/), note: t.col(/備註/), check: t.col(/需要確認/) };
+    const get = (r, k) => (c[k] >= 0 ? String(r[c[k]] || '').trim() : '');
+    let current = [...places];
+    const toSave = new Map();
+    let added = 0, merged = 0;
+    for (const r of t.rows) {
+      const name = get(r, 'name');
+      if (!name) continue;
+      const row = { type: toType(get(r, 'type')), transport: toTransport(get(r, 'transport')), season: toSeason(get(r, 'season')),
+        theme: get(r, 'theme'), access: get(r, 'access'), desc: get(r, 'desc'), note: get(r, 'note') };
+      const visits = parseDates(get(r, 'dates'));
+      const needsType = /室內外/.test(get(r, 'check')) || !row.type;
+      const hit = findPlace(current, name) || toSave.get(placeKey(name));
+      const filled = Object.fromEntries(Object.entries(row).filter(([, v]) => v));
+      const item = hit
+        ? { ...hit, ...filled, visits: [...new Set([...(hit.visits || []), ...visits])].sort(), needsType: hit.needsType && needsType }
+        : { name, type: row.type || 'mixed', ...filled, visits, needsType };
+      if (hit) merged++; else added++;
+      toSave.set(placeKey(name), item);
+      if (hit && hit.id) current = current.map(p => (p.id === hit.id ? item : p));
+    }
+    const list = [...toSave.values()];
+    for (let i = 0; i < list.length; i += 300) await store.saveMany('places', list.slice(i, i + 300));
+    places = await store.list('places');
+    const lines = [`✅ 匯入完成：新增 ${added} 個地點、更新 ${merged} 個（名稱相同的，去過的日期會合併，不會重複）。`];
+    // 本季行程
+    const planSheet = names.find(n => /本季|行程/.test(n));
+    const pt = planSheet ? table(book[planSheet], /週次|^週$/) : null;
+    if (pt) {
+      const wc = pt.col(/週次|^週$/), pc = pt.col(/地點/), bc = pt.col(/預約/);
+      const dates = tripDates(start);
+      const weeks = dates.map((d, i) => ({ ...(plan?.weeks?.[i] || {}), week: i + 1, date: d }));
+      let n = 0;
+      const missing = [];
+      for (const r of pt.rows) {
+        const w = Number(String(r[wc] || '').replace(/\D/g, ''));
+        const p = findPlace(places, r[pc] || '');
+        if (w && w <= 10 && !p && String(r[pc] || '').trim()) missing.push(`第 ${w} 週「${String(r[pc]).trim()}」`);
+        if (!w || w > 10 || !p) continue;
+        weeks[w - 1] = { ...weeks[w - 1], sunnyId: p.id, rainyId: rainSafe(p) ? p.id : (weeks[w - 1].rainyId || ''), chosen: 'sunny', booked: /是|✓|v|完成|已/i.test(String(r[bc] || '')) };
+        n++;
+      }
+      if (n && (!plan || confirm(`要用檔案裡「本季行程」的 ${n} 週，換掉現在的 10 週計畫嗎？`))) { await savePlan(weeks); lines.push(`🗓️ 已匯入本季行程 ${n} 週（標「已預約」的也一起勾好了）。`); }
+      if (missing.length) lines.push(`⚠️ 這幾週的地點在地點庫裡找不到，沒有排進去，請自己選：${missing.join('、')}`);
+    }
+    importMsg.replaceChildren(el('div', { class: 'notice ok' }, ...lines.map(l => el('div', {}, l))));
+    toast('匯入完成');
+    drawList(); drawPlan();
+  });
+
   // ---------- 10 週計畫 ----------
   const planBox = el('div');
   const planMsg = el('div');
@@ -160,10 +244,14 @@ export async function renderPlaces(root, ctx) {
       el('div', {}, issues.length ? `⚠️ ${issues.join('、')}。請看天氣預報決定，並先跟對方預約。` : '✅ 已經決定、也預約好了。')));
   }
   async function savePlan(weeks) { plan = { id: 'current', start, weeks }; await store.save('plans', plan); }
+  const anchorCb = el('input', { type: 'checkbox', checked: true });
+  const quarter = quarterOf(start), season = seasonOfQuarter(quarter);
   const autoBtn = el('button', { class: 'btn primary' }, '🗓️ 自動排 10 週');
   autoBtn.addEventListener('click', async () => {
     if (plan && !confirm('要重新排 10 週嗎？現在的安排會被換掉。')) return;
-    const r = planTen(places, start);
+    const anchor = anchorCb.checked ? findAnchor(places) : null;
+    if (anchorCb.checked && !anchor) toast('地點庫裡沒有「總圖」，第 1、5、9 週就照一般方式排');
+    const r = planTen(places, start, { anchorId: anchor?.id || '' });
     await savePlan(r.weeks);
     planMsg.replaceChildren(...r.warnings.map(w => el('div', { class: 'notice warn' }, w)));
     drawPlan();
@@ -220,10 +308,18 @@ export async function renderPlaces(root, ctx) {
       el('label', {}, '地點名稱 *'), form.name,
       el('label', {}, '室內還是室外？'), form.type,
       el('p', { class: 'muted' }, '🏠 室內：下雨也能去　🌳 室外：要天晴　🏠🌳 室內外都有：下雨可以去室內的部分（例如園區、植物園）'),
+      el('div', { class: 'row' },
+        el('div', {}, el('label', {}, '交通'), form.transport),
+        el('div', {}, el('label', {}, '適合哪一季'), form.season)),
       el('label', {}, '備註'), form.note,
       el('label', {}, '去過的日期'), form.dates,
       formMsg,
       el('div', { class: 'btns' }, saveBtn, cancelBtn)),
+    el('div', { class: 'card' },
+      el('h2', {}, '📂 匯入地點 Excel'),
+      el('p', { class: 'muted' }, '匯入整理好的地點檔（.xlsx）。名稱一樣的地點會合併，去過的日期不會重複。檔案裡如果有「本季行程」工作表，也會一起匯入 10 週計畫。'),
+      el('div', { class: 'btns', style: 'margin-top:0' }, el('button', { class: 'btn primary', onclick: () => importInput.click() }, '📂 選擇 Excel 檔'), importInput),
+      importMsg),
     el('div', { class: 'card' },
       el('h2', {}, '📋 一次貼上很多個'),
       el('p', { class: 'muted' }, '每行一個：地點,室內或室外,去過的日期（日期可以不寫，多個用分號分開）。名稱已經有的，會把日期合併進去。'),
@@ -231,6 +327,8 @@ export async function renderPlaces(root, ctx) {
     el('div', { class: 'card' },
       el('h2', {}, '🗓️ 這個學季的 10 週計畫'),
       el('p', { class: 'muted' }, `從 ${toROC(tripDates(start)[0])} 開始，共 10 個週二。規則：沒去過的、最久沒去的優先；晴天地點不重複；室外不連續超過 2 週；下雨的備案一定是室內。每週都可以自己改。前一週看天氣預報、先預約好之後，在那一週選「決定去哪個」並勾「已預約」。`),
+      quarter ? el('p', {}, `📅 這是第 ${quarter} 學季（${SEASONS[season].label.split('（')[0]}）：會優先排${season === 'summer' ? '「夏季推薦」的室內' : '「秋冬推薦」的戶外'}地點。`) : null,
+      el('label', { class: 'inline' }, anchorCb, el('span', {}, '第 1、5、9 週固定去總圖（歷年都是這樣排）')),
       el('div', { class: 'btns', style: 'margin-top:0' }, autoBtn, copyPlan),
       remindBox, planMsg, planBox),
   ].filter(Boolean));

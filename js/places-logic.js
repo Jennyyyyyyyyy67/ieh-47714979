@@ -12,6 +12,21 @@ export const TYPES = {
   outdoor: { label: '室外', icon: '🌳', note: '要天晴' },
   mixed: { label: '室內外都有', icon: '🏠🌳', note: '下雨可去室內的部分' },
 };
+export const SEASONS = {
+  summer: { label: '夏季（第一、四學季）', icon: '☀️' },
+  winter: { label: '秋冬（第二、三學季）', icon: '🍂' },
+};
+/** 學季：開學月份 8～10 月＝第一學季、11～1 月＝第二、2～4 月＝第三、5～7 月＝第四 */
+export function quarterOf(startISO) {
+  const m = Number(String(startISO || '').slice(5, 7));
+  if (!m) return 0;
+  return m >= 8 && m <= 10 ? 1 : (m >= 11 || m === 1) ? 2 : m <= 4 ? 3 : 4;
+}
+/** 第一、四學季是夏天（推薦室內）；第二、三學季是秋冬（推薦戶外） */
+export const seasonOfQuarter = (q) => (q === 1 || q === 4 ? 'summer' : q === 2 || q === 3 ? 'winter' : '');
+/** 固定去的地點（預設：總圖），找名字有「總圖」或「圖書館總館」的 */
+export const findAnchor = (places) => places.find(p => /圖書館總館|總圖/.test(p.name)) || null;
+
 export const typeLabel = (t) => `${(TYPES[t] || TYPES.mixed).icon} ${(TYPES[t] || TYPES.mixed).label}`;
 /** 下雨也能去：室內，或室內外都有 */
 export const rainSafe = (p) => p.type === 'indoor' || p.type === 'mixed' || !p.type;
@@ -79,11 +94,17 @@ export function tripDates(startISO, weeks = 10) {
  * 4. 室外地點最多連續 2 週，避免一直曬太陽或淋雨
  * 回傳 { weeks:[{week,date,sunnyId,rainyId}], warnings:[…] }
  */
-export function planTen(places, startISO, { fixed = {} } = {}) {
+export function planTen(places, startISO, { fixed = {}, anchorId = '', anchorWeeks = [0, 4, 8] } = {}) {
   const warnings = [];
   const dates = tripDates(startISO);
+  const season = seasonOfQuarter(quarterOf(startISO));
+  // 固定地點（例如第 1、5、9 週去總圖）
+  const anchor = anchorId ? places.find(p => p.id === anchorId) : null;
+  if (anchor) anchorWeeks.forEach(i => { if (!fixed[i]) fixed = { ...fixed, [i]: { sunnyId: anchor.id, rainyId: anchor.id } }; });
   const staleness = (p) => lastVisit(p) || '0000-00-00';
-  const byStale = [...places].sort((a, b) => staleness(a).localeCompare(staleness(b)) || a.name.localeCompare(b.name, 'zh-Hant'));
+  // 這一季適合的先排（Word 檔的原則：夏天室內、秋冬戶外），再看最久沒去的
+  const fits = (p) => (!season || !p.season || p.season === season ? 0 : 1);
+  const byStale = [...places].sort((a, b) => fits(a) - fits(b) || staleness(a).localeCompare(staleness(b)) || a.name.localeCompare(b.name, 'zh-Hant'));
   const usedSunny = new Set(), usedRainy = new Set();
   // 第一輪：先排好 10 週的晴天地點
   const sunnyOf = [];
@@ -92,7 +113,7 @@ export function planTen(places, startISO, { fixed = {} } = {}) {
     const keep = fixed[i];
     let sunny = keep ? places.find(p => p.id === keep.sunnyId) : null;
     if (!sunny) {
-      let pool = byStale.filter(p => !usedSunny.has(p.id));
+      let pool = byStale.filter(p => !usedSunny.has(p.id) && (!anchor || p.id !== anchor.id));
       if (outdoorRun >= 2) { const indoor = pool.filter(rainSafe); if (indoor.length) pool = indoor; }
       sunny = pool[0] || null;
     }

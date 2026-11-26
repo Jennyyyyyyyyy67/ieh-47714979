@@ -7,6 +7,7 @@ const BASE = process.env.BASE || 'http://localhost:8765/?local=1';
 const SHOTS = process.env.SHOTS || '';
 const XLSX_LIB = process.env.XLSX_LIB || '';
 const FAKE_ROSTER = process.env.FAKE_ROSTER || '';
+const FAKE_PLACES = process.env.FAKE_PLACES || '';
 import { readFileSync } from 'node:fs';
 const results = [];
 const step = async (name, fn) => {
@@ -91,7 +92,8 @@ const context = await browser.newContext({ viewport: { width: 1200, height: 900 
 const page = await context.newPage();
 const pageErrors = [];
 page.on('pageerror', e => pageErrors.push(e.message));
-page.on('dialog', d => d.accept());
+let dialogYes = true; // 跳出「確定嗎？」時要按確定還是取消
+page.on('dialog', d => (dialogYes ? d.accept() : d.dismiss()));
 await mockGemini(page);
 await page.goto(BASE);
 
@@ -717,14 +719,16 @@ await step('踏查地點：新增、一次貼上、搜尋（打名字知道什�
   await page.fill('input[placeholder*="打地點名稱"]', '');
 });
 
-await step('踏查地點：自動排 10 週，晴天不重複、雨天一定是室內', async () => {
+await step('踏查地點：自動排 10 週，晴天不重複（總圖除外）、雨天一定是室內', async () => {
   await page.click('text=🗓️ 自動排 10 週');
   await page.waitForSelector('text=第 10 週');
   assert.equal(await page.locator('.plan-row select').count(), 30);
   const rows = await page.$$eval('.plan-row', els => els.map(e => [...e.querySelectorAll('select')].slice(0, 2).map(s => s.selectedOptions[0].textContent)));
   assert.equal(rows.length, 10);
   const sunny = rows.map(r => r[0]);
-  assert.equal(new Set(sunny).size, 10, '晴天地點不重複：' + sunny);
+  const others = sunny.filter((_, i) => ![0, 4, 8].includes(i));
+  assert.equal(new Set(others).size, 7, '除了固定的總圖，晴天地點不重複：' + sunny);
+  for (const i of [0, 4, 8]) assert.ok(sunny[i].includes('總圖'), '第 1、5、9 週是總圖：' + sunny);
   for (const r of rows) assert.ok(!r[1].startsWith('🌳') && !r[1].includes('（空）'), '雨天備案不能是室外或空的：' + r[1]);
   assert.ok((await page.textContent('main')).includes('115/11/17（二）'), '第 1 週是 11/17');
   assert.ok((await page.textContent('main')).includes('116/01/19（二）'), '第 10 週是 1/19');
@@ -793,6 +797,53 @@ await step('前一週決定：選晴天或雨天＋勾已預約，踏查頁當�
   await page.fill('input[type=date] >> nth=0', '2026-12-01');
   await page.dispatchEvent('input[type=date] >> nth=0', 'change');
   assert.equal(await page.inputValue('input[placeholder*="高雄市立圖書館"]'), '老師自己打的地點');
+});
+
+await step('匯入地點 Excel：新增、合併去過日期、交通／季節標籤、本季行程（找不到的會提醒）', async () => {
+  if (!FAKE_PLACES) throw new Error('沒有提供測試用地點檔');
+  await page.click('.tabs >> text=📍 踏查地點');
+  await page.waitForSelector('.plan-row');
+  await page.setInputFiles('input[type=file][accept=".xlsx,.xls"]', FAKE_PLACES);
+  await page.waitForSelector('text=匯入完成：新增 2 個地點、更新 1 個');
+  const msg = await page.textContent('main');
+  assert.ok(msg.includes('已匯入本季行程 1 週'), '本季行程要匯入');
+  assert.ok(msg.includes('第 4 週「不存在的地點」'), '找不到的地點要提醒');
+  await page.fill('input[placeholder*="打地點名稱"]', '愛河河堤');
+  let c = await page.textContent('.topic');
+  assert.ok(c.includes('去過 2 次，最近一次 115/07/07') && c.includes('🚇 捷運'), c);
+  await page.fill('input[placeholder*="打地點名稱"]', '測試室內館甲');
+  c = await page.textContent('.topic');
+  assert.ok(c.includes('去過 2 次') && c.includes('🍂') && c.includes('捷運 R9'), c);
+  await page.fill('input[placeholder*="打地點名稱"]', '測試戶外園乙');
+  c = await page.textContent('.topic');
+  assert.ok(c.includes('🚌 專車') && c.includes('請確認室內／室外') && c.includes('還沒去過'), c);
+  await page.fill('input[placeholder*="打地點名稱"]', '');
+  const w3 = page.locator('.plan-row').nth(2);
+  assert.ok((await w3.locator('select').first().evaluate(s => s.selectedOptions[0].textContent)).includes('測試室內館甲'));
+  assert.ok(await w3.locator('input[type=checkbox]').isChecked(), '標「是」的要勾已預約');
+  // 再匯入一次，去過的日期不會重複
+  dialogYes = false;
+  await page.setInputFiles('input[type=file][accept=".xlsx,.xls"]', FAKE_PLACES);
+  await page.waitForSelector('text=新增 0 個地點、更新 3 個');
+  dialogYes = true;
+  await page.fill('input[placeholder*="打地點名稱"]', '測試室內館甲');
+  assert.ok((await page.textContent('.topic')).includes('去過 2 次'));
+  await page.fill('input[placeholder*="打地點名稱"]', '');
+});
+
+await step('自動排 10 週：第 1、5、9 週固定總圖；秋冬學季優先排秋冬的地點', async () => {
+  await page.click('text=🗓️ 自動排 10 週');
+  await page.waitForTimeout(300);
+  const sunny = await page.$$eval('.plan-row', els => els.map(e => e.querySelector('select').selectedOptions[0].textContent));
+  for (const i of [0, 4, 8]) assert.ok(sunny[i].includes('高雄市立總圖'), `第 ${i + 1} 週：${sunny[i]}`);
+  assert.equal(sunny.filter(s => s.includes('總圖')).length, 3, sunny.join('/'));
+  assert.ok(!sunny.slice(0, 3).some(s => s.includes('測試戶外園乙')), '夏季的地點不該排在最前面：' + sunny.join('/'));
+  // 取消勾選就照一般方式排
+  await page.uncheck('label:has-text("固定去總圖") input');
+  await page.click('text=🗓️ 自動排 10 週');
+  await page.waitForTimeout(300);
+  const s2 = await page.$$eval('.plan-row', els => els.map(e => e.querySelector('select').selectedOptions[0].textContent));
+  assert.ok(s2.filter(s => s.includes('總圖')).length <= 1, s2.join('/'));
 });
 
 await step('Gemini 忙不過來（503）：自動重試，最後成功，老師不用重按', async () => {
