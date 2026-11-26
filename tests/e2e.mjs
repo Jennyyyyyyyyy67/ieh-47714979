@@ -29,9 +29,12 @@ async function mockGemini(page) {
     const body = JSON.parse(req.postData());
     const text = body.contents[0].parts.find(p => p.text)?.text || '';
     const images = body.contents[0].parts.filter(p => p.inline_data).length;
-    geminiCalls.push({ text, images, key: req.headers()['x-goog-api-key'] });
+    const mimes = body.contents[0].parts.filter(p => p.inline_data).map(p => p.inline_data.mime_type);
+    geminiCalls.push({ text, images, mimes, key: req.headers()['x-goog-api-key'] });
     let out;
-    if (text.includes('自己出題、自己回答')) {
+    if (text.includes('請把這段錄音逐字轉成文字')) {
+      out = { transcript: '錄音轉出來的逐字稿：今天老師帶領大家學習感謝與尊重，並且分享了本週的領袖挑戰。' };
+    } else if (text.includes('自己出題、自己回答')) {
       const lines = [...text.matchAll(/^(S\d+)：(.*)$/gm)];
       out = { results: lines.map(([, id, ans]) => ({ id, verdict: /不知道/.test(ans) ? '錯' : '對', reason: '自出題判斷' })) };
     } else if (text.includes('請判斷每位學生這一題')) {
@@ -80,8 +83,8 @@ async function pickRole(p, label) {
   await p.click(`.role-card:has-text("${label}")`);
 }
 
-const browser = await chromium.launch();
-const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
+const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
+const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, permissions: ['clipboard-read', 'clipboard-write', 'microphone'] });
 const page = await context.newPage();
 const pageErrors = [];
 page.on('pageerror', e => pageErrors.push(e.message));
@@ -185,14 +188,41 @@ await step('踏查：問卷連結＋自動問卷標題', async () => {
 });
 
 await step('踏查：產生四種版本＋問卷題目', async () => {
+  const nCalls = geminiCalls.length;
   await page.click('text=✨ 產生文案');
   await page.waitForSelector('text=📝 教學紀錄', { timeout: 10000 });
+  assert.equal(geminiCalls.length - nCalls, 4, '5 種版本分成 4 組同時請 AI 寫：家長+問卷、FB、IG、教學紀錄');
+  const wants = geminiCalls.slice(nCalls).map(c => /line_body/.test(c.text) ? 'line' : /fb_post/.test(c.text) ? 'fb' : /ig_caption/.test(c.text) ? 'ig' : /teaching_process/.test(c.text) ? 'record' : '?').sort();
+  assert.deepEqual(wants, ['fb', 'ig', 'line', 'record']);
+  const fbCall = geminiCalls.slice(nCalls).find(c => /fb_post/.test(c.text));
+  assert.ok(!/ig_caption|teaching_process|line_body/.test(fbCall.text), 'FB 那一組只帶自己的寫法說明');
   const last = geminiCalls.at(-1);
   assert.ok(!last.text.includes('學習主題庫'), '不再使用學習主題庫');
   assert.ok(last.text.includes('孩子們在書架前用分類號找書'), '提示詞用老師核對過的描述');
 });
 
 const outText = async (title) => page.locator('.output-block', { hasText: title }).locator('textarea').inputValue();
+
+await step('同時生成：其中一種失敗，其他的保留並提醒；再按一次就全部補齊', async () => {
+  let failFb = true;
+  await page.route('https://generativelanguage.googleapis.com/**', async route => {
+    if (failFb && route.request().method() === 'POST' && /fb_post（Facebook/.test(route.request().postData() || '')) {
+      return route.fulfill({ status: 400, json: { error: { code: 400, message: 'bad request for test' } } });
+    }
+    return route.fallback();
+  });
+  await page.click('button:has-text("✨ 產生文案")');
+  await page.waitForSelector('text=這幾個沒有寫成功：Facebook', { timeout: 15000 });
+  assert.ok((await outText('家長群組溫馨回顧')).startsWith('【戶外踏查】'), '成功的那些要保留');
+  assert.ok((await outText('Instagram 貼文')).includes('#戶外踏查'));
+  failFb = false;
+  const before = geminiCalls.length;
+  await page.click('button:has-text("✨ 產生文案")');
+  await page.waitForFunction(() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.includes('產生文案')); return b && !b.disabled && b.textContent.trim() === '✨ 產生文案'; });
+  assert.equal(geminiCalls.length - before, 4, '再按一次，4 組都重新寫');
+  assert.ok((await outText('Facebook 貼文')).length > 0, '再按一次之後 FB 也有了');
+  assert.ok(!(await page.isVisible('text=這幾個沒有寫成功')));
+});
 
 await step('LINE 版：照範本格式、附問卷連結和 12 點提醒', async () => {
   const t = await outText('家長群組溫馨回顧');
@@ -264,6 +294,64 @@ await step('照片不會被存進資料庫', async () => {
 if (SHOTS) {
   await page.screenshot({ path: `${SHOTS}/desktop-trip.png`, fullPage: true });
 }
+
+await step('週會錄音：要先勾同意才能錄；錄音→轉成文字→放進逐字稿欄（錄音不存檔）', async () => {
+  await page.click('.tabs >> text=⛪ 週會');
+  await page.fill('textarea[placeholder*="逐字稿"]', '');
+  assert.ok(await page.isDisabled('button:has-text("開始錄音")'), '沒勾同意前不能錄');
+  assert.ok(await page.isDisabled('button:has-text("上傳錄音檔")'));
+  await page.check('text=我確認可以把這段錄音傳給 Google 轉成文字');
+  const before = geminiCalls.length;
+  await page.click('button:has-text("開始錄音")');
+  await page.waitForSelector('text=錄音中');
+  await page.waitForTimeout(2500);
+  await page.click('button:has-text("停止並轉成文字")');
+  await page.waitForSelector('text=已轉成文字，放進下面的逐字稿欄');
+  const call = geminiCalls[before];
+  assert.ok(call.mimes[0]?.startsWith('audio/'), '送出去的是聲音：' + call.mimes);
+  assert.ok(!call.mimes[0].includes(';'), 'mime 不能帶 codecs');
+  assert.ok(call.text.includes('某位同學'), '提示詞要求學生名字改成「某位同學」');
+  assert.ok((await page.inputValue('textarea[placeholder*="逐字稿"]')).includes('錄音轉出來的逐字稿'));
+  const dump = await page.evaluate(() => JSON.stringify(localStorage));
+  assert.ok(!dump.includes('base64') && !dump.includes('audio/'), '錄音不能被存起來');
+});
+
+await step('週會錄音：上傳音檔（mp3）會接在逐字稿後面；太大會擋下、不送出', async () => {
+  const before = geminiCalls.length;
+  await page.setInputFiles('input[type=file][accept*="audio"]', { name: '週會.mp3', mimeType: 'audio/mpeg', buffer: Buffer.alloc(2000, 1) });
+  await page.waitForSelector('text=已轉成文字', { state: 'attached' });
+  await page.waitForFunction(n => true, 0);
+  await page.waitForTimeout(300);
+  assert.equal(geminiCalls.length - before, 1);
+  assert.equal(geminiCalls.at(-1).mimes[0], 'audio/mpeg');
+  const t = await page.inputValue('textarea[placeholder*="逐字稿"]');
+  assert.equal(t.split('錄音轉出來的逐字稿').length - 1, 2, '兩段都在');
+  const b2 = geminiCalls.length;
+  await page.setInputFiles('input[type=file][accept*="audio"]', { name: '太長.mp3', mimeType: 'audio/mpeg', buffer: Buffer.alloc(15 * 1024 * 1024, 1) });
+  await page.waitForSelector('text=錄音檔太大了');
+  assert.equal(geminiCalls.length, b2, '太大的不能送出去');
+  await page.setInputFiles('input[type=file][accept*="audio"]', { name: '不明檔案.xyz', mimeType: 'application/octet-stream', buffer: Buffer.alloc(100, 1) });
+  await page.waitForSelector('text=看不出是什麼聲音格式');
+  assert.equal(geminiCalls.length, b2);
+});
+
+await step('週會錄音：沒有麥克風權限時，給白話說明', async () => {
+  const ctxNo = await browser.newContext({ viewport: { width: 1000, height: 800 } }); // 沒有給 microphone 權限
+  const pn = await ctxNo.newPage();
+  await pn.addInitScript(() => { navigator.mediaDevices.getUserMedia = () => Promise.reject(Object.assign(new Error('denied'), { name: 'NotAllowedError' })); });
+  await mockGemini(pn);
+  await pn.goto(BASE);
+  await pn.fill('input[autocomplete=username]', 'mic@example.com');
+  await pn.fill('input[type=password]', 'secret123');
+  await pn.click('summary:has-text("第一次使用")'); await pn.click('button:has-text("建立這個帳號")');
+  await pickRole(pn, '踏查、週會、發送');
+  await pn.click('.tabs >> text=⛪ 週會');
+  await pn.check('text=我確認可以把這段錄音傳給 Google 轉成文字');
+  await pn.click('button:has-text("開始錄音")');
+  await pn.waitForSelector('text=沒有麥克風權限');
+  assert.ok(await pn.isVisible('button:has-text("開始錄音")'), '失敗後按鈕還在，可以再試');
+  await ctxNo.close();
+});
 
 await step('週會：超過 300 字會自動再精簡一次', async () => {
   await page.click('.tabs >> text=⛪ 週會');

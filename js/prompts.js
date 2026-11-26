@@ -143,24 +143,34 @@ export const TRIP_SCHEMA = {
   required: ['line_title', 'line_body', 'home_questions', 'fb_post', 'ig_caption', 'ig_hashtags', 'teaching_process', 'class_connection', 'fact_check'],
 };
 
+/** 把一次踏查要產生的文案，分成幾組「同時」請 AI 寫（每組只帶自己需要的說明，比較快）。 */
+export function tripGroups(outputs) {
+  const groups = [];
+  const lineOrQ = outputs.line || outputs.survey || outputs.lineQuestions;
+  if (lineOrQ) groups.push({ key: 'line', label: '家長群組／問卷題目', outputs: { line: outputs.line, survey: outputs.survey, lineQuestions: outputs.lineQuestions }, fields: [...(outputs.line ? ['line_title', 'line_body'] : []), 'home_questions'] });
+  if (outputs.fb) groups.push({ key: 'fb', label: 'Facebook', outputs: { fb: true }, fields: ['fb_post'] });
+  if (outputs.ig) groups.push({ key: 'ig', label: 'Instagram', outputs: { ig: true }, fields: ['ig_caption', 'ig_hashtags'] });
+  if (outputs.record) groups.push({ key: 'record', label: '教學紀錄', outputs: { record: true }, fields: ['teaching_process', 'class_connection'] });
+  return groups;
+}
+
+/** 這一組只要求 AI 回答自己的欄位（再加上事實來源清單） */
+export function tripSchemaFor(fields) {
+  const props = {};
+  [...fields, 'fact_check'].forEach(f => { props[f] = TRIP_SCHEMA.properties[f]; });
+  return { type: 'OBJECT', properties: props, required: [...fields, 'fact_check'] };
+}
+
 export function tripPrompt({ trip, photoNotes, outputs, docParts }) {
   const want = [];
   if (outputs.line) want.push('line_title、line_body（家長群組溫馨回顧）');
   if (outputs.survey || outputs.lineQuestions) want.push('home_questions（回家可以問孩子的問題，1～2 題）');
   if (outputs.fb) want.push('fb_post（Facebook 粉專貼文）');
   if (outputs.ig) want.push('ig_caption、ig_hashtags（Instagram 貼文和 hashtag）');
-  if (outputs.record) want.push('teaching_process（教學紀錄的活動過程）');
+  if (outputs.record) want.push('teaching_process（教學紀錄的活動過程）、class_connection（一兩句話寫出這次的學習重點）');
 
-  const text = `你是國小老師的文案助理，要把一次校外踏查整理成不同版本的文字。
-
-${SAFETY_RULES}
-
-【這次要產生的欄位】
-${want.join('\n')}
-沒列到的文字欄位請回傳空字串（陣列回傳空陣列）。class_connection 和 fact_check 一定要填。
-
-【各版本的寫法】
-■ 家長群組溫馨回顧（line_title + line_body）：完全模仿下面範例的語氣和結構。
+  const guide = [];
+  if (outputs.line) guide.push(`■ 家長群組溫馨回顧（line_title + line_body）：完全模仿下面範例的語氣和結構。
   - line_title：一句有畫面的主題＋「：走進○○」＋ 2 個 emoji，不要包含【戶外踏查】（系統會自動加在上一行）。
   - line_body 分三段，段落之間空一行：
     第一段：用一個問句和「爸爸媽媽」對話，接著說「今天我們帶孩子走進……，展開一場……的探索！」
@@ -172,13 +182,23 @@ ${want.join('\n')}
 ${TRIP_EXAMPLES[0]}
 
   範例 2：
-${TRIP_EXAMPLES[1]}
+${TRIP_EXAMPLES[1]}`);
+  if (outputs.survey || outputs.lineQuestions) guide.push('■ home_questions：1～2 題，每題都要和這次學習單的學習重點有關，用孩子聽得懂的話，開放式問題（不是是非題）。');
+  if (outputs.fb) guide.push('■ fb_post：給學校粉專的宣傳貼文，3～5 段短段落，可用少量 emoji，最後一句邀請大家一起關注孩子的學習。要帶出孩子們學到了什麼。');
+  if (outputs.ig) guide.push('■ ig_caption：2～4 行，有節奏感、比 FB 更短。ig_hashtags：8～12 個，不要加 # 號以外的符號，要有地點、活動類型、學習主題，例如「戶外踏查」「校外教學」。不要出現學校名稱以外的個人資訊。');
+  if (outputs.record) guide.push('■ teaching_process：依行程表順序條列（每行以「・」開頭），寫實、不誇大。\n■ class_connection：一兩句話，寫這次的學習重點（依學習單／行程表）。');
+  guide.push('■ fact_check：把你寫的內容中提到的每件事列出來，並寫來源（行程表／學習單／照片N）。如果某件事找不到來源，就不要寫進文案。');
 
-■ home_questions：1～2 題，每題都要和這次學習單的學習重點有關，用孩子聽得懂的話，開放式問題（不是是非題）。
-■ fb_post：給學校粉專的宣傳貼文，3～5 段短段落，可用少量 emoji，最後一句邀請大家一起關注孩子的學習。要帶出孩子們學到了什麼。
-■ ig_caption：比 FB 更短、更有節奏感，2～4 行。ig_hashtags：8～12 個，不要加 # 號以外的符號，要有地點、活動類型、學習主題，例如「戶外踏查」「校外教學」。不要出現學校名稱以外的個人資訊。
-■ teaching_process：依行程表順序條列（每行以「・」開頭），寫實、不誇大。
-■ fact_check：把文案中提到的每件事列出來，並寫來源。如果某件事找不到來源，就不要寫進文案。
+  const text = `你是國小老師的文案助理，要把一次校外踏查整理成文字。
+
+${SAFETY_RULES}
+
+【這次要產生的欄位】
+${want.join('\n')}
+只回答上面列出的欄位，另外 fact_check 一定要填。
+
+【寫法】
+${guide.join('\n')}
 
 【活動基本資料】
 日期：${trip.date}
@@ -308,4 +328,23 @@ ${question}
 【學生寫的內容】（S 開頭是代號）
 ${answers.map(a => `${a.id}：${a.answer}`).join('\n')}`;
   return [{ text }];
+}
+
+// ---------- 5. 週會錄音轉逐字稿 ----------
+export const TRANSCRIBE_SCHEMA = {
+  type: 'OBJECT',
+  properties: { transcript: { type: 'STRING' } },
+  required: ['transcript'],
+};
+
+export function transcribePrompt() {
+  return `請把這段錄音逐字轉成文字（逐字稿），給國小老師整理週會內容用。
+
+【規則】
+- 使用台灣繁體中文，照講話的內容寫，不要摘要、不要改寫、不要加評論。
+- 經文和人名照聽到的寫；不確定的字，寫最可能的，並在後面加「（？）」。
+- 完全聽不清楚的地方寫「（聽不清楚）」，不要自己編。
+- 如果聽到學生的名字，一律改寫成「某位同學」。老師的名字可以保留。
+- 不用標時間，也不用標是誰在說話。
+- 沒有人說話或只有雜音，就回傳空字串。`;
 }

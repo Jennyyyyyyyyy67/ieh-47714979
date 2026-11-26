@@ -1,7 +1,7 @@
 // 🚌 每週二踏查：行程表 → 照片 → AI 看照片（老師核對）→ 問卷連結 → 產生文案 → 檢查清單 → 複製
 import { el, todayISO, toROC, surveyTitle, resizeImage, fileToBase64, formatBytes, quarterWeek, weekRanges } from '../utils.js';
 import { callGemini, DEFAULT_MODEL } from '../gemini.js';
-import { PHOTO_SCHEMA, photoPrompt, TRIP_SCHEMA, tripPrompt } from '../prompts.js';
+import { PHOTO_SCHEMA, photoPrompt, tripGroups, tripSchemaFor, tripPrompt } from '../prompts.js';
 import { publishChecklist, outputBlock, spinnerButton } from './common.js';
 import { recordVisit } from './places.js';
 import { findPlace, visitSummary, typeLabel, DEFAULT_DEPART, DEFAULT_RETURN, DEFAULT_RETURN_PLACE, tripDates, DEFAULT_QUARTER_START } from '../places-logic.js';
@@ -40,7 +40,7 @@ export function assembleTexts(S, r) {
   const texts = {};
   const qs = (r.home_questions || []).slice(0, 2);
   if (S.outputs.line) {
-    const parts = ['【戶外踏查】', String(r.line_title || '').replace(/^【戶外踏查】\s*/, '').trim(), '', r.line_body.trim()];
+    const parts = ['【戶外踏查】', String(r.line_title || '').replace(/^【戶外踏查】\s*/, '').trim(), '', String(r.line_body || '').trim()];
     if (S.outputs.lineQuestions && qs.length) parts.push('', '💬 回家可以問問孩子：', ...qs.map(q => `・${q}`));
     if (S.survey.g12) parts.push('', `小小孩問卷（${S.survey.smallRange}年級）：`, S.survey.g12);
     if (S.survey.g38) parts.push('', `大孩子問卷（${S.survey.bigRange}年級）：`, S.survey.g38);
@@ -343,10 +343,33 @@ export async function renderTrip(root, ctx) {
     const done = spinnerButton(genBtn, 'AI 正在寫文案…');
     try {
       const photoNotes = S.photoNotes.map((n, i) => `照片${i + 1}：${n.seen}${n.highlights ? `（亮點：${n.highlights}）` : ''}${n.uncertain && n.uncertain !== '無' ? `［不確定：${n.uncertain}］` : ''}`).join('\n');
-      const parts = tripPrompt({ trip: S, photoNotes, outputs: S.outputs, docParts: docParts() });
-      const r = await callGemini({ apiKey: settings.geminiKey, model: settings.model || DEFAULT_MODEL, parts, schema: TRIP_SCHEMA, temperature: 0.6 });
+      // 每一種文案同時請 AI 寫，比一次寫完快；其中一種失敗，其他的還是保留
+      const groups = tripGroups(S.outputs);
+      let finished = 0;
+      const label = genBtn.lastChild;
+      const settled = await Promise.allSettled(groups.map(async g => {
+        const parts = tripPrompt({ trip: S, photoNotes, outputs: g.outputs, docParts: docParts() });
+        const out = await callGemini({ apiKey: settings.geminiKey, model: settings.model || DEFAULT_MODEL, parts, schema: tripSchemaFor(g.fields), temperature: 0.6 });
+        finished++;
+        if (label) label.textContent = ` AI 正在寫文案…（完成 ${finished}/${groups.length}）`;
+        return out;
+      }));
+      const r = { fact_check: [] };
+      const failed = [];
+      settled.forEach((res, i) => {
+        if (res.status === 'fulfilled') {
+          const { fact_check, ...rest } = res.value;
+          Object.assign(r, Object.fromEntries(groups[i].fields.map(f => [f, rest[f]])));
+          r.fact_check.push(...(fact_check || []));
+        } else failed.push({ label: groups[i].label, message: res.reason?.message || '失敗了' });
+      });
+      const seenFacts = new Set();
+      r.fact_check = r.fact_check.filter(x => { const k = `${x.claim}|${x.source}`; if (seenFacts.has(k)) return false; seenFacts.add(k); return true; });
+      if (failed.length === groups.length) throw new Error(failed[0].message);
       S.result = r;
       S.texts = assembleTexts(S, r);
+      S.failedGroups = failed.map(f => f.label);
+      if (failed.length) genMsg.replaceChildren(el('div', { class: 'notice warn' }, `⚠️ 這幾個沒有寫成功：${failed.map(f => f.label).join('、')}。其他的已經完成。再按一次「✨ 產生文案」就會全部重寫；${failed[0].message}`));
       await save();
       // 記進地點庫：這個地點這天去過
       try {

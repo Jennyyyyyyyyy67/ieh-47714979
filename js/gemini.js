@@ -87,7 +87,8 @@ async function callOnce({ apiKey, model, parts, schema, temperature = 0.4 }) {
     const err = new Error(friendlyError(res.status, text));
     err.status = res.status;
     err.raw = text;
-    err.retryable = res.status >= 500;
+    // 5xx＝Google 太擠；429 且不是「今天的額度用完」＝一分鐘內太多次，等一下就好
+    err.retryable = res.status >= 500 || (res.status === 429 && !/PerDay|per day/i.test(text));
     throw err;
   }
   const data = JSON.parse(text);
