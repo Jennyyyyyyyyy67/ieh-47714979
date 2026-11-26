@@ -3,7 +3,7 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 
-const BASE = process.env.BASE || 'http://localhost:8765/';
+const BASE = process.env.BASE || 'http://localhost:8765/?local=1';
 const SHOTS = process.env.SHOTS || '';
 const XLSX_LIB = process.env.XLSX_LIB || '';
 const FAKE_ROSTER = process.env.FAKE_ROSTER || '';

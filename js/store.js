@@ -176,7 +176,8 @@ class FirebaseStore {
 }
 
 export async function createStore() {
-  const store = firebaseConfigured() ? new FirebaseStore() : new LocalStore();
+  const forceLocal = typeof location !== 'undefined' && new URLSearchParams(location.search).has('local');
+  const store = firebaseConfigured() && !forceLocal ? new FirebaseStore() : new LocalStore();
   await store.init();
   return store;
 }
