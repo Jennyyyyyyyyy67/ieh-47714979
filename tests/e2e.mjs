@@ -361,6 +361,18 @@ if (SHOTS) {
   await page.screenshot({ path: `${SHOTS}/desktop-trip.png`, fullPage: true });
 }
 
+await step('週會錄音：預設藏起來；在設定打開才會出現', async () => {
+  await page.click('.tabs >> text=⛪ 週會');
+  await page.waitForSelector('textarea[placeholder*="逐字稿"]');
+  assert.ok(!(await page.isVisible('text=錄音轉逐字稿')), '預設不顯示');
+  await page.click('.tabs >> text=⚙️ 設定');
+  await page.check('label:has-text("錄音轉逐字稿") input');
+  await page.click('text=💾 儲存設定');
+  await page.waitForSelector('text=設定已儲存');
+  await page.click('.tabs >> text=⛪ 週會');
+  await page.waitForSelector('text=🎙️ 錄音轉逐字稿');
+});
+
 await step('週會錄音：要先勾同意才能錄；錄音→轉成文字→放進逐字稿欄（錄音不存檔）', async () => {
   await page.click('.tabs >> text=⛪ 週會');
   await page.fill('textarea[placeholder*="逐字稿"]', '');
@@ -411,6 +423,10 @@ await step('週會錄音：沒有麥克風權限時，給白話說明', async ()
   await pn.fill('input[type=password]', 'secret123');
   await pn.click('summary:has-text("第一次使用")'); await pn.click('button:has-text("建立這個帳號")');
   await pickRole(pn, '踏查、週會、發送');
+  await pn.click('.tabs >> text=⚙️ 設定');
+  await pn.check('label:has-text("錄音轉逐字稿") input');
+  await pn.click('text=💾 儲存設定');
+  await pn.waitForSelector('text=設定已儲存');
   await pn.click('.tabs >> text=⛪ 週會');
   await pn.check('text=我確認可以把這段錄音傳給 Google 轉成文字');
   await pn.click('button:has-text("開始錄音")');

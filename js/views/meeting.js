@@ -181,7 +181,7 @@ ${text}` : text;
       M.id ? el('span', { class: 'muted' }, `正在編輯：${toROC(M.date)} 的週會`) : null,
     ),
     !settings.geminiKey ? el('div', { class: 'notice danger' }, '還沒設定 Gemini 鑰匙，AI 功能不能用。', el('button', { class: 'btn small', onclick: () => ctx.go('settings') }, '去設定')) : null,
-    recCard,
+    settings.showRecorder ? recCard : null,
     el('div', { class: 'card' },
       el('div', { class: 'row' },
         el('div', {}, el('label', {}, '日期'), date),

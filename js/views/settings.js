@@ -17,6 +17,7 @@ export async function renderSettings(root, ctx) {
   const modelList = el('datalist', { id: 'modelList' });
   const fastModel = el('input', { type: 'text', value: s.fastModel || '', list: 'modelList', placeholder: guessFastModel(s.model) });
   const speaker = el('input', { type: 'text', value: s.speaker || '蓓禎老師' });
+  const showRecorder = el('input', { type: 'checkbox', checked: !!s.showRecorder });
   const sendWeekday = el('select', {}, ...['日', '一', '二', '三', '四', '五', '六'].map((d, i) => el('option', { value: String(i), selected: i === (s.sendWeekday ?? 2) }, `星期${d}`)));
   const sendTime = el('input', { type: 'time', value: s.sendTime || '17:00' });
   const quarterStart = el('input', { type: 'date', value: s.quarterStart || DEFAULT_QUARTER_START });
@@ -76,7 +77,7 @@ export async function renderSettings(root, ctx) {
   });
   const saveBtn = el('button', { class: 'btn primary' }, '💾 儲存設定');
   saveBtn.addEventListener('click', async () => {
-    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, fastModel: fastModel.value.trim(), speaker: speaker.value.trim(), sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value), quarterStart: quarterStart.value || DEFAULT_QUARTER_START,
+    const next = { ...s, geminiKey: key.value.trim(), model: model.value.trim() || DEFAULT_MODEL, fastModel: fastModel.value.trim(), speaker: speaker.value.trim(), showRecorder: showRecorder.checked, sendWeekday: Number(sendWeekday.value), sendTime: sendTime.value || '17:00', retentionDays: Number(retention.value), quarterStart: quarterStart.value || DEFAULT_QUARTER_START,
       departTime: departTime.value || DEFAULT_DEPART, returnTime: returnTime.value || DEFAULT_RETURN, returnPlace: returnPlace.value.trim() || DEFAULT_RETURN_PLACE,
       postmanUrl: postmanUrl.value.trim(), postmanSecret: postmanSecret.value.trim(),
       reportLabels: Object.fromEntries(Object.entries(labelInputs).map(([k, v]) => [k, { title: v.title.value, note: v.note.value }])) };
@@ -108,6 +109,7 @@ export async function renderSettings(root, ctx) {
     !isMain ? null : el('div', { class: 'card' },
       el('h2', {}, '⛪ 週會'),
       el('label', {}, '預設分享的老師'), speaker,
+      el('label', { class: 'inline' }, showRecorder, el('span', {}, '🎙️ 在週會頁顯示「錄音轉逐字稿」（平常用不到，所以預設藏起來）')),
     ),
     el('div', { class: 'card' },
       el('h2', {}, '📋 本週名單的格式'),
