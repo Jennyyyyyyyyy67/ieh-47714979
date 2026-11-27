@@ -20,16 +20,16 @@ async function mockPostman(p) {
       const b = JSON.parse(req.postData() || '{}');
       fakePostman.posts.push(b);
       if (b.secret === fakePostman.secret) {
-        if (b.action === 'schedule') fakePostman.job = { ...b.job, lineCount: b.job.line.length, hasFb: !!b.job.fb, status: 'scheduled', results: {} };
+        if (b.action === 'schedule') fakePostman.job = { ...b.job, lineCount: b.job.line.length, hasFb: !!b.job.fb, hasIg: !!b.job.ig, photoCount: (b.job.photos || []).length, status: 'scheduled', results: {} };
         if (b.action === 'cancel' && fakePostman.job) fakePostman.job.status = 'cancelled';
-        if (b.action === 'retry' && fakePostman.job) fakePostman.job = { ...fakePostman.job, status: 'sent', sentAt: Date.now(), results: { line: { ok: true, msg: '發給所有好友，2 個泡泡' }, fb: { ok: true, msg: 'FB 粉專已發文' } } };
+        if (b.action === 'retry' && fakePostman.job) fakePostman.job = { ...fakePostman.job, retryId: b.retryId, status: 'sent', sentAt: Date.now(), results: { line: { ok: true, msg: '發給所有好友，2 個泡泡' }, fb: { ok: true, msg: 'FB 粉專已發文' } } };
       }
       return route.fulfill({ status: 200, body: '{}' });
     }
     const cb = u.searchParams.get('callback');
     let out;
     if (u.searchParams.get('secret') !== fakePostman.secret) out = { ok: false, error: '郵差密碼不對。請到網站「設定」重新貼上。' };
-    else if (u.searchParams.get('action') === 'check') out = { ok: true, triggerOn: true, dryRun: false, lineTest: false, line: { ok: true, name: '測試官方帳號', quota: 3000, used: 120, friends: 108 }, fb: { ok: true, name: '測試粉專' } };
+    else if (u.searchParams.get('action') === 'check') out = { ok: true, triggerOn: true, dryRun: false, lineTest: false, line: { ok: true, name: '測試官方帳號', quota: 3000, used: 120, friends: 108 }, fb: { ok: true, name: '測試粉專' }, ig: { ok: true, name: '@test_ig' }, drive: { ok: true } };
     else out = { ok: true, triggerOn: true, job: fakePostman.job };
     return route.fulfill({ status: 200, contentType: 'application/javascript', body: `${cb}(${JSON.stringify(out)});` });
   });
@@ -490,6 +490,7 @@ await step('設定：貼上郵差網址和密碼；密碼錯會說明，對了�
   await page.waitForSelector('text=郵差有回應，密碼正確');
   const t = await page.textContent('main');
   assert.ok(t.includes('測試官方帳號') && t.includes('已用 120 / 3000 則') && t.includes('約 108 位好友') && t.includes('測試粉專'), t);
+  assert.ok(t.includes('📸 IG：✅ @test_ig') && t.includes('雲端硬碟（暫存照片）：✅'), t);
   assert.ok(!fakePostman.posts.length, '檢查時不可以送東西給郵差');
   await page.click('text=💾 儲存設定');
   await page.waitForSelector('text=設定已儲存');
@@ -503,6 +504,9 @@ await step('自動發送：勾完 4 項才能按確認；按了交給郵差，�
   const boxes = page.locator('.checklist input[type=checkbox]');
   for (let i = 0; i < await boxes.count(); i++) await boxes.nth(i).check();
   assert.ok(await go.isEnabled());
+  // 這一步先只發文字：IG 一定要有照片，所以先取消勾選 IG（下一步再測照片）
+  const igCb = page.locator('label:has-text("發到 IG") input');
+  if (await igCb.isChecked()) await igCb.uncheck();
   // 老師在發送前改了一個字，郵差要收到改過的版本
   const ta = page.locator('.output-block textarea').first();
   await ta.fill((await ta.inputValue()) + '（老師改過）');
@@ -514,6 +518,8 @@ await step('自動發送：勾完 4 項才能按確認；按了交給郵差，�
   assert.equal(p.job.line.length, 2, '週會＋踏查兩個泡泡');
   assert.ok(p.job.line[0].endsWith('（老師改過）'));
   assert.ok(p.job.fb.length > 0, 'FB 貼文');
+  assert.equal(p.job.ig, '', '沒勾 IG 就不發');
+  assert.equal(p.job.photos.length, 0, '沒有照片');
   const d = new Date(p.job.sendAt);
   assert.deepEqual([d.getDay(), d.getHours(), d.getMinutes()], [2, 17, 0], '週二 17:00');
   assert.ok(d > new Date() && d - new Date() <= 7 * 86400000, '下一個週二 17:00（今天已經過了就排下週）');
@@ -541,6 +547,83 @@ await step('自動發送：這週時間過了，可以按「現在馬上發送�
   const p = fakePostman.posts.at(-1);
   assert.equal(p.action, 'schedule');
   assert.ok(Math.abs(p.job.sendAt - t0) < 60000, '現在就發');
+});
+
+await step('自動發送 IG：沒選照片會擋下；選照片（太長太寬的自動裁成 IG 能收的比例、可以換順序）→ 交給郵差，FB 也附照片', async () => {
+  const card = page.locator('.card:has(h2:has-text("確認後自動發送"))');
+  const igCb = card.locator('label:has-text("發到 IG") input');
+  assert.ok(await igCb.isEnabled(), '這次踏查有 IG 文案');
+  await igCb.check();
+  const go = card.locator('button:has-text("自動發送")').first();
+  const before = fakePostman.posts.length;
+  await go.click();
+  await page.waitForSelector('text=IG 一定要有照片：請在「📷 照片」選');
+  assert.equal(fakePostman.posts.length, before, '沒照片不可以送給郵差');
+  const tall = await makeJpeg(page, 600, 1500, '#36c');  // 太高：裁成 4:5
+  const wide = await makeJpeg(page, 3000, 1000, '#c63'); // 太寬：裁成 1.9:1，長邊 1440
+  await card.locator('input[type=file]').setInputFiles([
+    { name: 'tall.jpg', mimeType: 'image/jpeg', buffer: tall },
+    { name: 'wide.jpg', mimeType: 'image/jpeg', buffer: wide },
+  ]);
+  await card.locator('.photo >> nth=1').waitFor();
+  const info = await card.textContent();
+  assert.ok(info.includes('已選 2 張') && info.includes('（已裁切）'), info);
+  assert.ok(!info.includes('IG 一定要有照片：請在'), '選了照片，紅字提醒要消失');
+  if (SHOTS) await card.screenshot({ path: `${SHOTS}/auto-send-ig.png` });
+  // ⬅ 換順序：寬的變第 1 張（IG 用第 1 張決定形狀）
+  await card.locator('.photo').nth(1).locator('button:has-text("⬅")').click();
+  await go.click();
+  await page.waitForSelector('text=照片 2 張');
+  const p = fakePostman.posts.at(-1);
+  assert.equal(p.action, 'schedule');
+  assert.ok(p.job.ig.length > 0, 'IG 文案');
+  assert.equal(p.job.photos.length, 2);
+  assert.equal(p.job.fbPhotos, true, 'FB 也附照片');
+  assert.ok(p.job.photos.every(x => x.mime === 'image/jpeg' && x.data.length > 100));
+  const dims = await page.evaluate(list => Promise.all(list.map(b64 => new Promise(res => {
+    const i = new Image(); i.onload = () => res([i.naturalWidth, i.naturalHeight]); i.src = `data:image/jpeg;base64,${b64}`;
+  }))), p.job.photos.map(x => x.data));
+  const [[w1, h1], [w2, h2]] = dims;
+  assert.ok(w1 === 1440 && w1 / h1 <= 1.91 && w1 / h1 >= 1.85, `寬的照片變第 1 張：${dims[0]}`);
+  assert.ok(w2 / h2 >= 0.8 && w2 / h2 <= 0.81, `直的照片裁成 4:5：${dims[1]}`);
+  // 只勾 FB、不附照片 → 不送照片
+  await igCb.uncheck();
+  await card.locator('label:has-text("FB 也附上") input').uncheck();
+  const n = fakePostman.posts.length;
+  await go.click();
+  for (let i = 0; i < 100 && fakePostman.posts.length <= n; i++) await page.waitForTimeout(100);
+  await page.waitForFunction(() => !document.querySelector('.spinner'));
+  const q = fakePostman.posts.at(-1);
+  assert.equal(q.job.photos.length, 0, '沒有要用照片就不送照片');
+  assert.equal(q.job.fbPhotos, false);
+  await card.locator('label:has-text("FB 也附上") input').check();
+});
+
+await step('自動發送：發送中會自動更新；發完顯示 FB／IG 貼文連結和「照片已刪掉」', async () => {
+  fakePostman.job = { ...fakePostman.job, status: 'sending' };
+  await page.click('button:has-text("重新整理狀態")');
+  await page.waitForSelector('text=📮 發送中');
+  fakePostman.job = { ...fakePostman.job, status: 'sent', sentAt: Date.now(), photosNote: '暫存的照片已經刪掉了。', results: {
+    line: { ok: true, msg: '發給所有好友，2 個泡泡' },
+    fb: { ok: true, msg: 'FB 粉專已發文（2 張照片）', url: 'https://www.facebook.com/123_999' },
+    ig: { ok: true, msg: 'IG 已發文（2 張照片）', url: 'https://www.instagram.com/p/abc/' } } };
+  await page.waitForSelector('text=✅ 已發送', { timeout: 8000 }); // 沒有按按鈕，自己更新
+  assert.ok(await page.isVisible('a[href="https://www.instagram.com/p/abc/"]'));
+  assert.ok(await page.isVisible('a[href="https://www.facebook.com/123_999"]'));
+  assert.ok(await page.isVisible('text=暫存的照片已經刪掉了'));
+});
+
+await step('自動發送：可以直接用踏查頁選過的照片（不用再選一次）', async () => {
+  await page.click('.tabs >> text=🚌 踏查');
+  await page.check('text=我確認：要上傳的照片裡');
+  await page.setInputFiles('input[type=file][accept="image/*"]', { name: 'c.jpg', mimeType: 'image/jpeg', buffer: await makeJpeg(page, 1600, 1200, '#693') });
+  await page.waitForSelector('.photo');
+  await page.click('.tabs >> text=📤 本週發送');
+  const card = page.locator('.card:has(h2:has-text("確認後自動發送"))');
+  await card.locator('button:has-text("用踏查頁選的照片（1 張）")').click();
+  await card.locator('.photo').first().waitFor();
+  assert.equal(await card.locator('.photo').count(), 1);
+  assert.ok(!(await card.locator('button:has-text("用踏查頁選的照片")').isVisible()), '已經有照片就不再顯示');
 });
 
 await step('問卷檢查：找出未交、遲交、重複、打錯字，並批改答案', async () => {

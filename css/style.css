@@ -1,3 +1,5 @@
+/* 有 hidden 的東西一定要藏起來（不然 .btn 的 display 會蓋掉它） */
+[hidden] { display: none !important; }
 :root {
   --bg: #f6f7f4;
   --card: #ffffff;
@@ -142,3 +144,6 @@ button.mark:hover { border-color: var(--primary); }
   .brand { font-size: 16px; white-space: nowrap; }
   .topbar { padding: 8px 12px; }
 }
+/* 本週發送：沒有要發照片時，照片區淡一點 */
+.muted-box { opacity: .6; }
+.photo .meta .btn.small { padding: 2px 8px; min-height: 0; margin-left: 4px; }

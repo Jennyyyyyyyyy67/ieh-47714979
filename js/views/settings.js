@@ -40,12 +40,14 @@ export async function renderSettings(root, ctx) {
     const done = spinnerButton(postmanBtn, '檢查中…');
     try {
       const r = await askPostman(postmanUrl.value.trim(), postmanSecret.value, 'check', 30000);
-      const L = r.line || {}, F = r.fb || {};
+      const L = r.line || {}, F = r.fb || {}, I = r.ig || {}, D = r.drive || {};
       const quota = L.quota != null ? `，這個月已用 ${L.used ?? '?'} / ${L.quota} 則` : L.quotaType === 'none' ? '，這個月沒有上限' : '';
-      postmanMsg.replaceChildren(el('div', { class: L.ok && F.ok && r.triggerOn ? 'notice ok' : 'notice warn' },
+      postmanMsg.replaceChildren(el('div', { class: L.ok && F.ok && I.ok && D.ok && r.triggerOn ? 'notice ok' : 'notice warn' },
         el('div', {}, '✅ 郵差有回應，密碼正確。'),
         el('div', {}, L.ok ? `📱 LINE：✅ ${L.name}${L.friends ? `（約 ${L.friends} 位好友）` : ''}${quota}` : `📱 LINE：❌ ${L.msg}`),
         el('div', {}, F.ok ? `📘 FB：✅ ${F.name}` : `📘 FB：❌ ${F.msg}`),
+        r.ig ? el('div', {}, I.ok ? `📸 IG：✅ ${I.name}` : `📸 IG：❌ ${I.msg}`) : null,
+        r.drive ? el('div', {}, D.ok ? '📁 雲端硬碟（暫存照片）：✅ 可以用' : `📁 雲端硬碟（暫存照片）：❌ ${D.msg}　請到 Apps Script 再執行一次「安裝」，允許使用雲端硬碟。`) : null,
         el('div', {}, r.triggerOn ? '⏰ 鬧鐘：✅ 每 5 分鐘檢查一次' : '⏰ 鬧鐘：❌ 還沒設定，請在 Apps Script 執行一次「安裝」'),
         r.dryRun ? el('div', {}, '🧪 現在是測試模式（DRY_RUN=1），不會真的發出去。') : null,
         r.lineTest ? el('div', {}, '🧪 LINE 現在只會發給測試的老師（LINE_TEST_USER_ID），不會發給家長。') : null));
@@ -136,7 +138,7 @@ export async function renderSettings(root, ctx) {
     ),
     !isMain ? null : el('div', { class: 'card' },
       el('h2', {}, '📮 自動發送（郵差）'),
-      el('p', { class: 'muted' }, '郵差是放在 Google Apps Script 的小程式，幫我們保管 LINE 和 FB 的鑰匙，時間到就發送。安裝方法請看 ',
+      el('p', { class: 'muted' }, '郵差是放在 Google Apps Script 的小程式，幫我們保管 LINE、FB、IG 的鑰匙，時間到就發送。安裝方法請看 ',
         el('a', { href: 'https://github.com/Jennyyyyyyyyy67/ieh-47714979/blob/main/apps-script/README.md', target: '_blank', rel: 'noopener' }, '郵差安裝說明'), '。'),
       el('label', {}, '郵差網址（部署後拿到的「網頁應用程式」網址）'), postmanUrl,
       el('label', {}, '郵差密碼（SECRET）'), postmanSecret,

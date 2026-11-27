@@ -35,6 +35,8 @@ function newState() {
 
 // 這次使用期間保留（換分頁回來還在）；照片不會被存進資料庫
 let S = newState();
+/** 踏查頁現在選的照片（只在記憶體）。「本週發送」可以直接拿來發 IG／FB */
+export const currentTripPhotos = () => S.photos || [];
 
 export function assembleTexts(S, r) {
   const texts = {};

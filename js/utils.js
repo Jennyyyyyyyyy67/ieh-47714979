@@ -128,6 +128,60 @@ export function topicsToCSV(topics) {
  * 在手機／電腦上先把照片縮小（長邊最多 maxSide 像素），轉成 JPEG。
  * 重新畫一次也會順便去掉照片裡的 GPS 位置等隱藏資訊。
  */
+/**
+ * IG 只收寬高比在 4:5（0.8）～ 1.91:1 之間的照片。太高或太寬的，從中間裁掉一點。
+ * 回傳要保留的範圍 {sx, sy, sw, sh}。（留一點點餘裕，避免四捨五入後剛好超出）
+ */
+export function fitAspectBox(w, h, min = 0.802, max = 1.9) {
+  const r = w / h;
+  if (r < min) { const sh = Math.floor(w / min); return { sx: 0, sy: Math.floor((h - sh) / 2), sw: w, sh }; }
+  if (r > max) { const sw = Math.floor(h * max); return { sx: Math.floor((w - sw) / 2), sy: 0, sw, sh: h }; }
+  return { sx: 0, sy: 0, sw: w, sh: h };
+}
+
+async function loadImageSource(src) {
+  if (typeof src === 'string') {
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('照片讀不出來，請重新選一次。'));
+      img.src = src;
+    });
+  }
+  try { return await createImageBitmap(src, { imageOrientation: 'from-image' }); }
+  catch {
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error(`「${src.name}」無法讀取，可能是 HEIC 格式。請改用 JPG/PNG，或用 iPhone 的「相機設定 → 格式 → 最相容」。`));
+      img.src = URL.createObjectURL(src);
+    });
+  }
+}
+
+/**
+ * 要發到 IG／FB 的照片：裁成 IG 能收的比例、長邊最多 1440、轉成 JPG（也會去掉 GPS 等隱藏資訊）。
+ * src 可以是檔案，或踏查頁已經縮小過的照片網址（dataUrl）。
+ */
+export async function preparePostPhoto(src, { name = '', maxSide = 1440, quality = 0.85 } = {}) {
+  const img = await loadImageSource(src);
+  const box = fitAspectBox(img.width, img.height);
+  const scale = Math.min(1, maxSide / Math.max(box.sw, box.sh));
+  const cw = Math.max(1, Math.round(box.sw * scale)), ch = Math.max(1, Math.round(box.sh * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  canvas.getContext('2d').drawImage(img, box.sx, box.sy, box.sw, box.sh, 0, 0, cw, ch);
+  const dataUrl = canvas.toDataURL('image/jpeg', quality);
+  const base64 = dataUrl.split(',')[1];
+  return {
+    name: name || src.name || 'photo.jpg',
+    width: cw, height: ch, dataUrl, base64,
+    bytes: Math.round(base64.length * 3 / 4),
+    mimeType: 'image/jpeg',
+    cropped: box.sw !== img.width || box.sh !== img.height,
+  };
+}
+
 export async function resizeImage(file, maxSide = 1280, quality = 0.8) {
   let source;
   try {
