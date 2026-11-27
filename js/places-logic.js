@@ -68,6 +68,18 @@ export function visitSummary(p, today = new Date()) {
   return `去過 ${v.length} 次，最近一次 ${toROC(last)}（${w === 0 ? '這週' : `${w} 週前`}）`;
 }
 
+/**
+ * AI 找到的地名，原文裡真的有嗎？（防止 AI 自己編）
+ * normText 是用 placeKey 整理過的原文。括號裡的別名可以不一樣。
+ */
+export function nameInText(name, normText) {
+  const k = placeKey(name);
+  if (!k || !normText) return false;
+  if (normText.includes(k)) return true;
+  const core = placeKey(String(name).replace(/[（(][^）)]*[）)]/g, ''));
+  return core.length >= 2 && normText.includes(core);
+}
+
 /** 找名稱相同的地點（忽略空白、標點、台臺） */
 export function findPlace(places, name) {
   const k = placeKey(name);

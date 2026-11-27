@@ -1,9 +1,13 @@
 // 📍 踏查地點：地點庫（室內／室外、去過的日期）＋自動排 10 週（晴天、雨天各一個）
 import { el, toROC, copyText } from '../utils.js';
-import { readXlsxBook } from './survey.js';
+import { currentRosterNames } from './survey.js';
+import { spinnerButton } from './common.js';
+import { callGemini, DEFAULT_MODEL } from '../gemini.js';
+import { PLACES_SCHEMA, placesExtractPrompt } from '../prompts.js';
+import { ACCEPT, readFiles, redactText, redactSummary, makeBatches } from '../doc-reader.js';
 import {
-  placeKey, TYPES, SEASONS, typeLabel, rainSafe, parseDates, lastVisit, visitSummary, findPlace, planTen, tripDates,
-  quarterOf, seasonOfQuarter, findAnchor,
+  placeKey, TYPES, SEASONS, typeLabel, rainSafe, parseDate, parseDates, lastVisit, visitSummary, findPlace, planTen, tripDates,
+  quarterOf, seasonOfQuarter, findAnchor, nameInText, TRIP_WEEKDAY,
   DEFAULT_QUARTER_START, DEFAULT_DEPART, DEFAULT_RETURN, DEFAULT_RETURN_PLACE,
 } from '../places-logic.js';
 
@@ -148,48 +152,43 @@ export async function renderPlaces(root, ctx) {
     if (added || merged) { bulk.value = ''; await refresh(); }
   });
 
-  // ---------- 匯入 Excel（整理好的地點檔，也可以有「本季行程」工作表） ----------
-  const importInput = el('input', { type: 'file', accept: '.xlsx,.xls', hidden: true });
+  // ---------- 匯入檔案 ----------
+  // 範本 Excel（有「地點名稱」欄）直接匯入；其他檔案（PDF、Word、PPT、照片、壓縮檔…）先在電腦上讀出文字、遮掉個資，
+  // 再請 AI 找地點和日期，老師看過、勾選後才匯入。
+  const importInput = el('input', { type: 'file', accept: ACCEPT, multiple: true, hidden: true });
   const importMsg = el('div');
+  const aiBox = el('div');
   const toType = (v) => (/室內外|都有|兩/.test(v) ? 'mixed' : /室內/.test(v) ? 'indoor' : /室外|戶外/.test(v) ? 'outdoor' : '');
   const toTransport = (v) => (/捷運|輕軌/.test(v) ? '捷運' : /專車|汽車|遊覽車|自車/.test(v) ? '專車' : '');
   const toSeason = (v) => (/夏|第一|第四/.test(v) ? 'summer' : /秋|冬|第二|第三/.test(v) ? 'winter' : '');
   function table(rows, must) {
-    const h = rows.findIndex(r => r.some(c => must.test(c)));
+    const h = (rows || []).findIndex(r => r.some(c => must.test(c)));
     if (h < 0) return null;
     const head = rows[h];
     const col = (re) => head.findIndex(c => re.test(c));
     return { rows: rows.slice(h + 1), col };
   }
-  importInput.addEventListener('change', async () => {
-    const f = importInput.files[0];
-    importInput.value = '';
-    if (!f) return;
-    importMsg.replaceChildren(el('div', { class: 'muted' }, '讀取中…'));
-    let book;
-    try { book = await readXlsxBook(f); } catch (e) { importMsg.replaceChildren(el('div', { class: 'notice danger' }, e.message)); return; }
-    const names = Object.keys(book);
-    const placeSheet = names.find(n => /地點/.test(n)) || names[0];
-    const t = table(book[placeSheet] || [], /地點名稱|^地點$/);
-    if (!t) { importMsg.replaceChildren(el('div', { class: 'notice danger' }, '這個檔案找不到「地點名稱」這一欄。')); return; }
-    const c = { name: t.col(/地點名稱|^地點$/), type: t.col(/室內外/), transport: t.col(/^交通$|交通方式/), season: t.col(/學季|季節/), theme: t.col(/主題/),
-      access: t.col(/交通說明|捷運站|怎麼去/), desc: t.col(/特色|參訪型態/), dates: t.col(/去過/), note: t.col(/備註/), check: t.col(/需要確認/) };
-    const get = (r, k) => (c[k] >= 0 ? String(r[c[k]] || '').trim() : '');
+
+  /**
+   * 把很多筆地點合併進地點庫（名稱一樣的合併，去過的日期不重複）。
+   * overwrite=false（AI 找到的）：老師已經填好的欄位不會被蓋掉，只補空的欄位。
+   */
+  async function mergeRows(rows, { overwrite = true } = {}) {
     let current = [...places];
     const toSave = new Map();
     let added = 0, merged = 0;
-    for (const r of t.rows) {
-      const name = get(r, 'name');
+    for (const row of rows) {
+      const name = String(row.name || '').trim();
       if (!name) continue;
-      const row = { type: toType(get(r, 'type')), transport: toTransport(get(r, 'transport')), season: toSeason(get(r, 'season')),
-        theme: get(r, 'theme'), access: get(r, 'access'), desc: get(r, 'desc'), note: get(r, 'note') };
-      const visits = parseDates(get(r, 'dates'));
-      const needsType = /室內外/.test(get(r, 'check')) || !row.type;
+      const { name: _name, visits = [], needsType = !row.type, ...rest } = row;
+      const filled = Object.fromEntries(Object.entries(rest).filter(([, v]) => v));
       const hit = findPlace(current, name) || toSave.get(placeKey(name));
-      const filled = Object.fromEntries(Object.entries(row).filter(([, v]) => v));
-      const item = hit
-        ? { ...hit, ...filled, visits: [...new Set([...(hit.visits || []), ...visits])].sort(), needsType: hit.needsType && needsType }
-        : { name, type: row.type || 'mixed', ...filled, visits, needsType };
+      let item;
+      if (!hit) item = { name, type: row.type || 'mixed', ...filled, visits: [...new Set(visits)].sort(), needsType };
+      else {
+        const add = overwrite ? filled : Object.fromEntries(Object.entries(filled).filter(([k]) => !hit[k] || (k === 'type' && hit.needsType && !needsType)));
+        item = { ...hit, ...add, visits: [...new Set([...(hit.visits || []), ...visits])].sort(), needsType: !!hit.needsType && needsType };
+      }
       if (hit) merged++; else added++;
       toSave.set(placeKey(name), item);
       if (hit && hit.id) current = current.map(p => (p.id === hit.id ? item : p));
@@ -197,6 +196,25 @@ export async function renderPlaces(root, ctx) {
     const list = [...toSave.values()];
     for (let i = 0; i < list.length; i += 300) await store.saveMany('places', list.slice(i, i + 300));
     places = await store.list('places');
+    return { added, merged };
+  }
+
+  /** 範本 Excel：地點工作表＋（有的話）本季行程工作表 */
+  async function importTemplate(book) {
+    const names = Object.keys(book);
+    const placeSheet = names.find(n => table(book[n], /^地點名稱$/)) || names.find(n => table(book[n], /^地點$/));
+    const t = table(book[placeSheet], /地點名稱|^地點$/);
+    if (!t) throw new Error('這個檔案找不到「地點名稱」這一欄。');
+    const c = { name: t.col(/地點名稱|^地點$/), type: t.col(/室內外/), transport: t.col(/^交通$|交通方式/), season: t.col(/學季|季節/), theme: t.col(/主題/),
+      access: t.col(/交通說明|捷運站|怎麼去/), desc: t.col(/特色|參訪型態/), dates: t.col(/去過/), note: t.col(/備註/), check: t.col(/需要確認/) };
+    const get = (r, k) => (c[k] >= 0 ? String(r[c[k]] || '').trim() : '');
+    const rows = t.rows.filter(r => get(r, 'name')).map(r => {
+      const type = toType(get(r, 'type'));
+      return { name: get(r, 'name'), type, transport: toTransport(get(r, 'transport')), season: toSeason(get(r, 'season')),
+        theme: get(r, 'theme'), access: get(r, 'access'), desc: get(r, 'desc'), note: get(r, 'note'),
+        visits: parseDates(get(r, 'dates')), needsType: /室內外/.test(get(r, 'check')) || !type };
+    });
+    const { added, merged } = await mergeRows(rows);
     const lines = [`✅ 匯入完成：新增 ${added} 個地點、更新 ${merged} 個（名稱相同的，去過的日期會合併，不會重複）。`];
     // 本季行程
     const planSheet = names.find(n => /本季|行程/.test(n));
@@ -218,10 +236,185 @@ export async function renderPlaces(root, ctx) {
       if (n && (!plan || confirm(`要用檔案裡「本季行程」的 ${n} 週，換掉現在的 10 週計畫嗎？`))) { await savePlan(weeks); lines.push(`🗓️ 已匯入本季行程 ${n} 週（標「已預約」的也一起勾好了）。`); }
       if (missing.length) lines.push(`⚠️ 這幾週的地點在地點庫裡找不到，沒有排進去，請自己選：${missing.join('、')}`);
     }
-    importMsg.replaceChildren(el('div', { class: 'notice ok' }, ...lines.map(l => el('div', {}, l))));
-    toast('匯入完成');
-    drawList(); drawPlan();
+    return lines;
+  }
+
+  importInput.addEventListener('change', async () => {
+    const files = [...importInput.files];
+    importInput.value = '';
+    if (!files.length) return;
+    aiBox.replaceChildren();
+    const say = (t) => importMsg.replaceChildren(el('div', { class: 'muted' }, t));
+    say('讀取中…');
+    let read;
+    try { read = await readFiles(files, say); }
+    catch (e) { importMsg.replaceChildren(el('div', { class: 'notice danger' }, e.message)); return; }
+    const out = [];
+    const templates = read.items.filter(i => i.kind === 'template');
+    for (const it of templates) {
+      try { out.push(el('div', { class: 'notice ok' }, el('strong', {}, `📗 ${it.source}`), ...(await importTemplate(it.book)).map(l => el('div', {}, l)))); }
+      catch (e) { out.push(el('div', { class: 'notice danger' }, `${it.source}：${e.message}`)); }
+    }
+    if (read.skipped.length) {
+      out.push(el('div', { class: 'notice warn' }, el('strong', {}, `⚠️ 有 ${read.skipped.length} 個檔案沒有讀到`),
+        ...read.skipped.map(x => el('div', {}, `・${x.source}：${x.why}`))));
+    }
+    const aiItems = read.items.filter(i => i.kind === 'text' || i.kind === 'binary');
+    if (!out.length && !aiItems.length) out.push(el('div', { class: 'notice danger' }, '沒有讀到任何內容。'));
+    importMsg.replaceChildren(...out);
+    if (templates.length) { toast('匯入完成'); drawList(); drawPlan(); }
+    if (aiItems.length) drawAiStep(aiItems);
   });
+
+  /** 第 2 步：給老師看要送給 AI 的內容（已遮個資），勾同意才送 */
+  function drawAiStep(items) {
+    const roster = currentRosterNames(ctx.settings);
+    const prepared = items.map(it => (it.kind === 'text' ? { ...it, ...redactText(it.text, roster) } : it));
+    const consent = el('input', { type: 'checkbox' });
+    const goBtn = el('button', { class: 'btn primary', disabled: true }, `🤖 請 AI 找出地點（${prepared.length} 個檔案）`);
+    const aiMsg = el('div');
+    consent.addEventListener('change', () => { goBtn.disabled = !consent.checked; });
+    const hasBinary = prepared.some(p => p.kind === 'binary');
+    const list = prepared.map(p => {
+      const hid = p.kind === 'text' ? redactSummary(p.counts) : '';
+      const info = p.kind === 'binary'
+        ? `${p.how}：沒辦法先遮掉個資，請確認裡面沒有學生資料`
+        : [p.how, `${p.text.length} 字`, hid && `已遮掉：${hid}`, p.note].filter(Boolean).join('・');
+      return el('details', { class: 'doc-item' },
+        el('summary', {}, `${p.kind === 'binary' ? '📷' : '📄'} ${p.source}　`, el('span', { class: 'muted' }, info)),
+        p.kind === 'text' ? el('pre', { class: 'doc-preview' }, p.text.length > 4000 ? `${p.text.slice(0, 4000)}\n…（後面還有 ${p.text.length - 4000} 字）` : p.text) : null);
+    });
+    aiBox.replaceChildren(el('div', { class: 'output-block' },
+      el('h3', {}, `🤖 這 ${prepared.length} 個檔案要請 AI 幫忙找地點`),
+      el('p', { class: 'muted' }, 'AI 會找出地點和去過的日期，先給你看過、勾選後才會存進地點庫。點開檔案，可以看要送給 AI 的內容（個資已經先遮掉）。'),
+      ...list,
+      el('div', { class: 'notice warn' },
+        '⚠️ 內容會傳給 Google Gemini 讀取（免費版的資料，Google 可能拿去改進產品）。系統會先遮掉：問卷名單裡的學生名字、電話、Email、身分證、班級、○○老師，還有「禁足／座號／生日…」和看起來像名單的整行。但沒辦法保證 100% 遮乾淨，有學生名單的頁面，最好上傳前先刪掉。',
+        hasBinary ? '　📷 掃描檔和照片沒辦法先遮，會整個傳過去。' : '',
+        roster.length ? `　（已用問卷名單的 ${roster.length} 個名字幫忙遮）` : '　💡 先到「📊 問卷檢查」貼上學生名單（不用存），就能把名單裡的名字一起遮掉。'),
+      el('label', { class: 'inline' }, consent, el('strong', {}, '我看過了，可以把這些內容傳給 Google Gemini 讀取')),
+      el('div', { class: 'btns' }, goBtn),
+      aiMsg));
+    goBtn.addEventListener('click', () => runAi(prepared, goBtn, aiMsg));
+  }
+
+  /** 第 3 步：分批請 AI 找地點 */
+  async function runAi(prepared, btn, msgBox) {
+    const st = ctx.settings || {};
+    if (!st.geminiKey) { msgBox.replaceChildren(el('div', { class: 'notice danger' }, '還沒設定 Gemini 鑰匙，請先到「⚙️ 設定」。')); return; }
+    const batches = makeBatches(prepared);
+    const done = spinnerButton(btn, 'AI 讀取中…');
+    const found = [];
+    const errors = [];
+    const notPlaces = [];
+    for (const [i, b] of batches.entries()) {
+      msgBox.replaceChildren(el('div', { class: 'muted' }, `AI 讀取中…（第 ${i + 1} / ${batches.length} 批，檔案多的話要等一下）`));
+      const parts = [{ text: placesExtractPrompt(b.binary ? { binarySource: b.binary.source } : { docs: b.docs }) }];
+      if (b.binary) parts.push({ inline_data: { mime_type: b.binary.mime, data: b.binary.base64 } });
+      try {
+        const res = await callGemini({ apiKey: st.geminiKey, model: st.model || DEFAULT_MODEL, parts, schema: PLACES_SCHEMA, temperature: 0.1 });
+        const srcKey = b.binary ? '' : placeKey(b.docs.map(d => d.text).join('\n'));
+        const srcNames = b.binary ? [b.binary.source] : [...new Set(b.docs.map(d => d.source))];
+        for (const p of res.places || []) found.push({ ...p, binary: !!b.binary, srcKey, srcNames });
+        notPlaces.push(...(res.skipped || []));
+      } catch (e) {
+        errors.push(`${b.binary ? b.binary.source : b.docs.map(d => d.label).join('、')}：${e.message}`);
+      }
+    }
+    done();
+    msgBox.replaceChildren();
+    drawReview(checkFound(found), errors, notPlaces);
+  }
+
+  /** 整理 AI 找到的：同名合併、日期檢查、原文找不找得到 */
+  function checkFound(found) {
+    const maxYear = new Date().getFullYear() + 1;
+    const map = new Map();
+    const clean = (v) => (v && v !== 'unknown' ? String(v).trim() : '');
+    for (const f of found) {
+      const name = String(f.name || '').replace(/^[「『"'\s]+|[」』"'\s]+$/g, '').trim();
+      const k = placeKey(name);
+      if (!k) continue;
+      const dates = (f.dates || []).map(parseDate).filter(d => d && Number(d.slice(0, 4)) >= 2010 && Number(d.slice(0, 4)) <= maxYear);
+      const cur = map.get(k) || { name, dates: [], type: '', typeFromDoc: false, transport: '', season: '', theme: '', access: '', desc: '', sources: new Set(), quotes: [], found: false, scan: false };
+      cur.dates.push(...dates);
+      if (!cur.type && clean(f.type)) { cur.type = clean(f.type); cur.typeFromDoc = !!f.typeFromDoc; }
+      else if (clean(f.type) && f.typeFromDoc && !cur.typeFromDoc) { cur.type = clean(f.type); cur.typeFromDoc = true; }
+      for (const key of ['transport', 'season', 'theme', 'access', 'desc']) if (!cur[key] && clean(f[key])) cur[key] = clean(f[key]);
+      (f.srcNames.includes(f.source) ? [f.source] : f.srcNames).forEach(x => cur.sources.add(x));
+      if (f.quote && cur.quotes.length < 2) cur.quotes.push(String(f.quote).slice(0, 60));
+      if (f.binary) cur.scan = true;
+      else if (nameInText(name, f.srcKey)) cur.found = true;
+      map.set(k, cur);
+    }
+    return [...map.values()].map(c => {
+      const dates = [...new Set(c.dates)].sort();
+      return { ...c, dates, sources: [...c.sources], notFound: !c.found && !c.scan, notTuesday: dates.filter(d => new Date(`${d}T12:00:00`).getDay() !== TRIP_WEEKDAY) };
+    }).sort((a, b) => Number(a.notFound) - Number(b.notFound) || a.name.localeCompare(b.name, 'zh-Hant'));
+  }
+
+  /** 第 4 步：老師檢查 AI 找到的地點，勾選後才匯入 */
+  function drawReview(list, errors, notPlaces) {
+    const box = el('div', { class: 'output-block' });
+    const errBox = errors.length ? el('div', { class: 'notice danger' }, el('strong', {}, `有 ${errors.length} 批 AI 沒有讀成功（可以再按一次「請 AI 找出地點」）`), ...errors.map(e => el('div', {}, `・${e}`))) : null;
+    if (!list.length) {
+      box.append(el('div', { class: 'notice warn' }, 'AI 沒有找到任何踏查地點。'), ...(errBox ? [errBox] : []));
+      aiBox.append(box);
+      return;
+    }
+    const rows = list.map(f => {
+      const cb = el('input', { type: 'checkbox', checked: !f.notFound, 'aria-label': `匯入 ${f.name}` });
+      const nameIn = el('input', { type: 'text', value: f.name, 'aria-label': '地點名稱', 'data-name': f.name });
+      const aiType = f.type || '';
+      const exists = findPlace(places, f.name);
+      // 地點庫裡已經有、而且老師確認過室內／室外的：顯示原本的，不讓 AI 的猜測蓋掉
+      const locked = !!(exists && !exists.needsType && exists.type);
+      const shown = locked ? exists.type : aiType;
+      const typeSel = el('select', { 'aria-label': '室內或室外', disabled: locked, title: locked ? '地點庫裡已經確認過，要改請到地點卡片按「修改」' : null },
+        ...[['', '❓ 不確定'], ['indoor', '🏠 室內'], ['outdoor', '🌳 室外'], ['mixed', '🏠🌳 室內外都有']].map(([v, t]) => el('option', { value: v, selected: v === shown }, t)));
+      const tags = [
+        el('span', { class: 'tag' }, exists ? (locked ? '已在地點庫：只會合併日期，室內／室外照原本的' : '已在地點庫：日期會合併') : '🆕 新地點'),
+        f.notFound ? el('span', { class: 'tag warn' }, '⚠️ 原文找不到這個名字，可能是 AI 自己想的（預設不匯入）') : null,
+        f.scan ? el('span', { class: 'tag warn' }, '📷 從掃描檔／照片讀的，請對照原檔') : null,
+        f.notTuesday.length ? el('span', { class: 'tag warn' }, `⚠️ ${f.notTuesday.map(toROC).join('、')} 不是星期二，日期可能算錯了`) : null,
+        !locked && aiType && !f.typeFromDoc ? el('span', { class: 'tag warn' }, '室內／室外是 AI 猜的') : null,
+      ].filter(Boolean);
+      const row = el('div', { class: `ai-row${f.notFound ? ' doubt' : ''}` },
+        el('div', { class: 'ai-row-head' }, cb, nameIn, typeSel),
+        el('div', { class: 'muted' }, f.dates.length ? `去過：${f.dates.map(toROC).join('、')}` : '文件沒寫日期（會記成「還沒去過」）'),
+        el('div', {}, ...tags),
+        el('div', { class: 'muted small' }, `來源：${f.sources.join('、')}`, f.quotes[0] ? `｜原文：「${f.quotes[0]}」` : ''));
+      return { f, cb, nameIn, typeSel, row };
+    });
+    const go = el('button', { class: 'btn primary' });
+    const refreshCount = () => { const n = rows.filter(r => r.cb.checked).length; go.textContent = `✅ 匯入勾選的 ${n} 個地點`; go.disabled = !n; };
+    rows.forEach(r => r.cb.addEventListener('change', refreshCount));
+    refreshCount();
+    go.addEventListener('click', async () => {
+      const pick = rows.filter(r => r.cb.checked && r.nameIn.value.trim());
+      const done = spinnerButton(go, '匯入中…');
+      const res = await mergeRows(pick.map(({ f, nameIn, typeSel }) => {
+        const v = typeSel.value;
+        return { name: nameIn.value.trim(), type: v, transport: f.transport, season: f.season, theme: f.theme, access: f.access, desc: f.desc,
+          visits: f.dates, needsType: !v || (v === (f.type || '') && !f.typeFromDoc) };
+      }), { overwrite: false });
+      done();
+      aiBox.replaceChildren(el('div', { class: 'notice ok' }, `✅ 匯入完成：新增 ${res.added} 個地點、更新 ${res.merged} 個（日期已合併）。沒勾的 ${rows.length - pick.length} 個沒有匯入。標「請確認室內／室外」的，記得到地點卡片按「修改」補上。`));
+      toast('匯入完成');
+      drawList(); drawPlan();
+    });
+    box.append(
+      el('h3', {}, `🔎 AI 找到 ${list.length} 個地點，請檢查`),
+      el('p', { class: 'muted' }, '名稱可以直接改；室內／室外可以重選。打勾的才會匯入。黃色標籤是要特別注意的地方。'),
+      errBox || '',
+      el('div', { class: 'btns', style: 'margin-top:0' },
+        el('button', { class: 'btn small', onclick: () => { rows.forEach(r => { r.cb.checked = true; }); refreshCount(); } }, '全選'),
+        el('button', { class: 'btn small', onclick: () => { rows.forEach(r => { r.cb.checked = false; }); refreshCount(); } }, '全部不選')),
+      ...rows.map(r => r.row),
+      notPlaces.length ? el('details', {}, el('summary', {}, `AI 看到、但不算踏查地點的（${notPlaces.length}）`), el('div', { class: 'muted' }, notPlaces.join('、'))) : '',
+      el('div', { class: 'btns' }, go));
+    aiBox.append(box);
+  }
 
   // ---------- 10 週計畫 ----------
   const planBox = el('div');
@@ -316,10 +509,13 @@ export async function renderPlaces(root, ctx) {
       formMsg,
       el('div', { class: 'btns' }, saveBtn, cancelBtn)),
     el('div', { class: 'card' },
-      el('h2', {}, '📂 匯入地點 Excel'),
-      el('p', { class: 'muted' }, '匯入整理好的地點檔（.xlsx）。名稱一樣的地點會合併，去過的日期不會重複。檔案裡如果有「本季行程」工作表，也會一起匯入 10 週計畫。'),
-      el('div', { class: 'btns', style: 'margin-top:0' }, el('button', { class: 'btn primary', onclick: () => importInput.click() }, '📂 選擇 Excel 檔'), importInput),
-      importMsg),
+      el('h2', {}, '📂 匯入地點檔案'),
+      el('p', { class: 'muted' }, '可以一次選很多個：Excel、PDF、Word（.docx）、PowerPoint（.pptx）、文字檔、照片、壓縮檔（.zip）都可以。名稱一樣的地點會合併，去過的日期不會重複。'),
+      el('ul', { class: 'muted' },
+        el('li', {}, '📗 照範本的 Excel（有「地點名稱」欄）：直接匯入。有「本季行程」工作表的話，也會一起匯入 10 週計畫。'),
+        el('li', {}, '🤖 其他檔案：先在你的電腦上讀出文字、遮掉個資，再請 AI 找出地點和日期。AI 找到的會先給你看過，勾選後才匯入。')),
+      el('div', { class: 'btns', style: 'margin-top:0' }, el('button', { class: 'btn primary', onclick: () => importInput.click() }, '📂 選擇檔案'), importInput),
+      importMsg, aiBox),
     el('div', { class: 'card' },
       el('h2', {}, '📋 一次貼上很多個'),
       el('p', { class: 'muted' }, '每行一個：地點,室內或室外,去過的日期（日期可以不寫，多個用分號分開）。名稱已經有的，會把日期合併進去。'),

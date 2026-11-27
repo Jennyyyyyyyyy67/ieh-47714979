@@ -8,6 +8,8 @@ const SHOTS = process.env.SHOTS || '';
 const XLSX_LIB = process.env.XLSX_LIB || '';
 const FAKE_ROSTER = process.env.FAKE_ROSTER || '';
 const FAKE_PLACES = process.env.FAKE_PLACES || '';
+const FAKE_ZIP = process.env.FAKE_ZIP || '';
+const LIBS_DIR = process.env.LIBS_DIR || '';
 import { readFileSync } from 'node:fs';
 // 假的郵差（Google Apps Script）：記住排程，用 JSONP 回答狀態
 const POSTMAN_URL = 'https://script.google.com/macros/s/FAKE_POSTMAN/exec';
@@ -43,6 +45,17 @@ const step = async (name, fn) => {
 const geminiCalls = [];
 async function mockGemini(page) {
   if (XLSX_LIB) await page.route('https://cdnjs.cloudflare.com/ajax/libs/xlsx/**', r => r.fulfill({ body: readFileSync(XLSX_LIB), contentType: 'application/javascript' }));
+  if (LIBS_DIR) {
+    const js = (file) => (r) => r.fulfill({ body: readFileSync(file), contentType: 'application/javascript' });
+    // PDF 工具：故意讓第一個 CDN（cdnjs）壞掉，測試會自動換第二個（jsdelivr）
+    await page.route('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/**', r => r.fulfill({ status: 404, body: 'not found' }));
+    await page.route('https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/**', r => {
+      const f = new URL(r.request().url()).pathname.split('/pdfjs-dist@3.11.174/')[1];
+      r.fulfill({ body: readFileSync(`${LIBS_DIR}/pdfjs-dist-3.11.174/package/${f}`), contentType: f.endsWith('.js') ? 'application/javascript' : 'application/octet-stream' });
+    });
+    await page.route('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', js(`${LIBS_DIR}/jszip-3.10.1/package/dist/jszip.min.js`));
+    await page.route('https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js', js(`${LIBS_DIR}/mammoth-1.6.0/package/mammoth.browser.min.js`));
+  }
   await page.route('https://generativelanguage.googleapis.com/**', async route => {
     const req = route.request();
     const url = req.url();
@@ -73,6 +86,19 @@ async function mockGemini(page) {
         verdict: /分類/.test(ans) ? '對' : /顏色/.test(ans) ? '錯' : '部分對',
         reason: /分類/.test(ans) ? '說出分類方法' : '方向對但不完整',
       })) };
+    } else if (text.includes('整理「戶外踏查地點」的小幫手')) {
+      const P = (name, dates, type, typeFromDoc, source, more = {}) => ({ name, dates, type, typeFromDoc, transport: 'unknown', season: 'unknown', theme: '', access: '', desc: '', source, quote: name, ...more });
+      out = images
+        ? { places: [P('照片裡的步道', ['2024-03-05'], 'outdoor', true, 'photo.jpg')], skipped: [] }
+        : { places: [
+          P('測試科學館', ['2021-09-28'], 'indoor', true, '110學年第一學季.pdf', { quote: '9/28 測試科學館（室內）' }),
+          P('測試濕地公園', ['2021-10-05', '2021-10-06'], 'outdoor', false, '110學年第一學季.pdf'),
+          P('測試天文台', [], 'indoor', true, '舊資料.zip › 未來地點.docx', { transport: '捷運', season: 'winter', access: '捷運 R5 站走 3 分鐘', desc: '看星星、天文課' }),
+          P('AI亂編的地方', ['2021-11-02'], 'indoor', false, '110學年第一學季.pdf', { quote: '' }),
+          P('愛河河堤', ['2023-02-21'], 'indoor', false, '舊資料.zip › 說明.txt'),
+          P('測試博物館', ['2023-11-21'], 'indoor', true, '舊資料.zip › 說明.txt'),
+          P('測試動物園', ['2026-03-10'], 'outdoor', false, '舊資料.zip › 行程.csv'),
+        ], skipped: ['防災演練（校內）'] };
     } else if (text.includes('逐張看照片')) {
       out = { photos: [
         { index: 1, seen: '孩子們在書架前找書', highlights: ['用分類號找書'], uncertain: ['看不出是哪一區'], privacy: [] },
@@ -997,7 +1023,7 @@ await step('匯入地點 Excel：新增、合併去過日期、交通／季節�
   if (!FAKE_PLACES) throw new Error('沒有提供測試用地點檔');
   await page.click('.tabs >> text=📍 踏查地點');
   await page.waitForSelector('.plan-row');
-  await page.setInputFiles('input[type=file][accept=".xlsx,.xls"]', FAKE_PLACES);
+  await page.setInputFiles('.card:has(h2:has-text("匯入地點檔案")) input[type=file]', FAKE_PLACES);
   await page.waitForSelector('text=匯入完成：新增 2 個地點、更新 1 個');
   const msg = await page.textContent('main');
   assert.ok(msg.includes('已匯入本季行程 1 週'), '本季行程要匯入');
@@ -1017,7 +1043,7 @@ await step('匯入地點 Excel：新增、合併去過日期、交通／季節�
   assert.ok(await w3.locator('input[type=checkbox]').isChecked(), '標「是」的要勾已預約');
   // 再匯入一次，去過的日期不會重複
   dialogYes = false;
-  await page.setInputFiles('input[type=file][accept=".xlsx,.xls"]', FAKE_PLACES);
+  await page.setInputFiles('.card:has(h2:has-text("匯入地點檔案")) input[type=file]', FAKE_PLACES);
   await page.waitForSelector('text=新增 0 個地點、更新 3 個');
   dialogYes = true;
   await page.fill('input[placeholder*="打地點名稱"]', '測試室內館甲');
@@ -1038,6 +1064,88 @@ await step('自動排 10 週：第 1、5、9 週固定總圖；秋冬學季優�
   await page.waitForTimeout(300);
   const s2 = await page.$$eval('.plan-row', els => els.map(e => e.querySelector('select').selectedOptions[0].textContent));
   assert.ok(s2.filter(s => s.includes('總圖')).length <= 1, s2.join('/'));
+});
+
+await step('匯入地點檔案：PDF、壓縮檔（Word、PPT、文字檔）、照片一次選；先遮個資、勾同意才送 AI；AI 找到的先檢查再匯入', async () => {
+  if (!FAKE_ZIP || !LIBS_DIR) throw new Error('沒有提供測試用檔案或讀檔工具');
+  // 先在問卷檢查貼上學生名單（不用存）：送給 AI 之前，名單裡的名字會被遮掉
+  await page.click('.tabs >> text=📊 問卷檢查');
+  await page.fill('textarea[placeholder*="姓名"]', '姓名\t年級\t班別\n測試甲乙\t3\t快樂兔');
+  // 用 Chromium 做一份有中文字的 PDF（像舊的行程表：有聯絡人電話、禁足名單、一串名字）
+  const pp = await context.newPage();
+  await pp.setContent(`<meta charset="utf-8"><h1>110學年度第一學季 戶外踏查行程</h1>
+    <table border="1"><tr><th>週次</th><th>日期</th><th>地點</th><th>聯絡人</th></tr>
+    <tr><td>一</td><td>9/28</td><td>測試科學館（室內）</td><td>王老師 0912-345-678</td></tr>
+    <tr><td>二</td><td>10/5</td><td>測試濕地公園</td><td>帶隊：測試甲乙</td></tr></table>
+    <p>禁足名單：測試丙丁、測試戊己</p><p>林小一 陳小二 張小三 李小四</p>`);
+  const pdf = await pp.pdf({ format: 'A4' });
+  await pp.close();
+  await page.click('.tabs >> text=📍 踏查地點');
+  const card = page.locator('.card:has(h2:has-text("匯入地點檔案"))');
+  const before = geminiCalls.length;
+  await card.locator('input[type=file]').setInputFiles([
+    { name: '110學年第一學季.pdf', mimeType: 'application/pdf', buffer: pdf },
+    { name: '舊資料.zip', mimeType: 'application/zip', buffer: readFileSync(FAKE_ZIP) },
+    { name: 'photo.jpg', mimeType: 'image/jpeg', buffer: await makeJpeg(page, 1200, 900, '#486') },
+  ]);
+  await card.locator('text=要請 AI 幫忙找地點').waitFor({ timeout: 30000 });
+  let t = await card.textContent();
+  assert.ok(t.includes('舊版.doc') && t.includes('舊版 Word（.doc）讀不到'), '舊版 Word 要說明怎麼辦');
+  assert.ok(!t.includes('._說明.txt'), 'Mac 的隱藏檔要略過');
+  for (const n of ['110學年第一學季.pdf', '未來地點.docx', '地點簡報.pptx', '說明.txt', '行程.csv', 'photo.jpg']) assert.ok(t.includes(n), `要列出 ${n}：${t}`);
+  assert.ok(t.includes('已用問卷名單的 1 個名字幫忙遮'), t);
+  assert.ok(/已遮掉：.*學生名字 1 個/.test(t) && /電話 \d 個/.test(t) && /名單、禁足等整行 \d 行/.test(t), t);
+  assert.equal(geminiCalls.length, before, '還沒按同意，不能送給 AI');
+  const go = card.locator('button:has-text("請 AI 找出地點")');
+  assert.ok(await go.isDisabled(), '要先勾同意');
+  await card.locator('label:has-text("可以把這些內容傳給 Google Gemini")').click();
+  await go.click();
+  await card.locator('h3:has-text("AI 找到")').waitFor({ timeout: 30000 });
+  // 送給 AI 的內容：有地點，沒有個資
+  const calls = geminiCalls.slice(before);
+  assert.equal(calls.length, 2, `文字一批、照片一批：${JSON.stringify(calls.map(c => ({ mimes: c.mimes, len: c.text.length, files: [...c.text.matchAll(/【檔案】(.*)/g)].map(m => m[1]) })))}`);
+  // 只看「檔案內容」那一段（給 AI 的指示裡本來就有「不要抄禁足名單」這種字）
+  const sent = calls.map(c => (c.text.includes('\n\n【檔案】') ? c.text.slice(c.text.indexOf('\n\n【檔案】')) : '')).join('\n');
+  for (const must of ['測試科學館', '測試濕地公園', '測試天文台 | 室內 | 捷運 R5 站走 3 分鐘', '愛河河堤', '【第 1 張投影片】', '測試博物館 介紹', '115/3/10 | 測試動物園 | 要預約']) assert.ok(sent.includes(must), `要送 ${must}`);
+  for (const never of ['0912-345-678', '測試甲乙', '禁足', '測試丙丁', '林小一', '王老師']) assert.ok(!sent.includes(never), `不可以送出：${never}`);
+  assert.deepEqual(calls.map(c => c.mimes.join()).sort(), ['', 'image/jpeg']);
+  // 檢查表
+  t = await card.textContent();
+  assert.ok(t.includes('AI 找到 8 個地點'), t);
+  const row = (name) => card.locator('.ai-row', { has: page.locator(`input[data-name="${name}"]`) });
+  assert.ok(!(await row('AI亂編的地方').locator('input[type=checkbox]').isChecked()), '原文找不到的，預設不匯入');
+  assert.ok((await row('AI亂編的地方').textContent()).includes('原文找不到這個名字'));
+  assert.ok((await row('測試濕地公園').textContent()).includes('110/10/06 不是星期二'));
+  assert.ok((await row('測試濕地公園').textContent()).includes('室內／室外是 AI 猜的'));
+  assert.ok((await row('照片裡的步道').textContent()).includes('從掃描檔／照片讀的'));
+  assert.ok((await row('愛河河堤').textContent()).includes('只會合併日期，室內／室外照原本的'));
+  const river = row('愛河河堤').locator('select');
+  assert.ok(await river.isDisabled(), '已經確認過的地點，不能在這裡被 AI 改');
+  assert.equal(await river.evaluate(x => x.value), 'outdoor', '顯示原本的室外，不是 AI 猜的室內');
+  assert.ok(!(await row('愛河河堤').textContent()).includes('AI 猜的'));
+  assert.ok(t.includes('防災演練'), '不算地點的也列出來');
+  // 手機寬度：檢查表不能左右捲動
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (SHOTS) await card.screenshot({ path: `${SHOTS}/import-review-mobile.png` });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 391), '手機畫面不能左右捲動');
+  await page.setViewportSize({ width: 1200, height: 900 });
+  // 老師把一個名字改掉再匯入
+  await row('測試博物館').locator('input[type=text]').fill('測試博物館（改過）');
+  await card.locator('button:has-text("匯入勾選的 7 個地點")').click();
+  await card.locator('text=匯入完成：新增 6 個地點、更新 1 個').waitFor();
+  const look = async (q) => { await page.fill('input[placeholder*="打地點名稱"]', q); return page.textContent('.topic'); };
+  let c = await look('測試天文台');
+  assert.ok(c.includes('還沒去過') && c.includes('🚇 捷運') && c.includes('🍂') && c.includes('捷運 R5 站') && !c.includes('請確認室內／室外'), c);
+  c = await look('測試科學館');
+  assert.ok(c.includes('去過 1 次，最近一次 110/09/28') && c.includes('🏠 室內') && !c.includes('請確認室內／室外'), c);
+  c = await look('測試濕地公園');
+  assert.ok(c.includes('請確認室內／室外') && c.includes('去過 2 次'), c);
+  c = await look('愛河河堤');
+  assert.ok(c.includes('去過 3 次') && c.includes('🌳 室外'), `原本的室外不能被 AI 改掉：${c}`);
+  assert.ok((await look('測試博物館（改過）')).includes('112/11/21'));
+  await page.fill('input[placeholder*="打地點名稱"]', 'AI亂編');
+  await page.waitForSelector('text=地點庫裡沒有「AI亂編」');
+  await page.fill('input[placeholder*="打地點名稱"]', '');
 });
 
 await step('Gemini 忙不過來（503）：自動重試，最後成功，老師不用重按', async () => {

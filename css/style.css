@@ -147,3 +147,14 @@ button.mark:hover { border-color: var(--primary); }
 /* 本週發送：沒有要發照片時，照片區淡一點 */
 .muted-box { opacity: .6; }
 .photo .meta .btn.small { padding: 2px 8px; min-height: 0; margin-left: 4px; }
+/* 踏查地點：匯入檔案（要送給 AI 的內容、AI 找到的地點檢查表） */
+.doc-item { border-top: 1px solid var(--line); padding: 6px 0; }
+.doc-item summary { cursor: pointer; overflow-wrap: anywhere; }
+.doc-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: 13px; background: var(--bg); border: 1px solid var(--line); padding: 8px; border-radius: 8px; margin: 6px 0 0; }
+.ai-row { border-top: 1px solid var(--line); padding: 10px 0; display: grid; gap: 6px; }
+.ai-row.doubt { opacity: .75; }
+.ai-row-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ai-row-head input[type=text] { flex: 1 1 200px; min-width: 0; }
+.ai-row-head select { flex: 0 1 170px; }
+.ai-row .tag { margin: 2px 4px 2px 0; display: inline-block; }
+.small { font-size: 13px; }

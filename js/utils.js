@@ -1,6 +1,15 @@
 // 小工具：建立畫面元素、日期、CSV、照片縮小、個資檢查
 
 /** 建立 DOM 元素（文字一律用 textContent，避免被插入惡意程式碼） */
+/** 文字檔（CSV、txt）：先當 UTF-8 讀，看不懂再當 Big5（Windows 的 Excel 另存 CSV 常常是 Big5） */
+export function decodeText(buf) {
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let t;
+  try { t = new TextDecoder('utf-8', { fatal: true }).decode(u8); }
+  catch { try { t = new TextDecoder('big5').decode(u8); } catch { t = new TextDecoder().decode(u8); } }
+  return t.replace(/^\uFEFF/, '');
+}
+
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {

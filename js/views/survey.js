@@ -1,6 +1,6 @@
 // 📊 問卷檢查：誰還沒交、誰遲交、答案對不對（可用 AI 批改簡答題）
 // 回覆只在這個畫面裡處理，不會被儲存。送給 AI 批改時只送「S1、S2…」代號和答案，不送學生名字。
-import { el, parseCSV, normName, parseFormTimestamp, parseScore, todayISO, copyText } from '../utils.js';
+import { el, parseCSV, normName, parseFormTimestamp, parseScore, todayISO, copyText, decodeText } from '../utils.js';
 import { callGemini, DEFAULT_MODEL } from '../gemini.js';
 import { GRADE_SCHEMA, gradePrompt } from '../prompts.js';
 import { spinnerButton } from './common.js';
@@ -45,6 +45,8 @@ const bandForAI = (b) => (b === '小小孩' ? '小小孩（低年級）' : b ===
 const S = { roster: '', deadlineDate: '', deadlineTime: '23:59', files: [] };
 /** 切換工作或登出時清空（下一位老師不會看到上一位上傳的回覆） */
 export function resetSurvey() { S.roster = ''; S.deadlineDate = ''; S.files = []; }
+/** 問卷檢查頁現在的學生名單（只拿名字）。地點頁把檔案送給 AI 之前，用來遮掉學生名字 */
+export function currentRosterNames(settings) { return parseRoster(S.roster || settings?.roster || '').map(r => r.name).filter(Boolean); }
 
 const ID_HINTS = ['姓名', '名字', '學生', 'name', '座號'];
 const TS_HINTS = ['時間戳記', 'timestamp', '時間'];
@@ -69,9 +71,15 @@ async function loadXlsxLib() {
     });
   }
 }
-export async function readXlsxRows(file) {
+/** 打開 Excel／CSV。CSV 先當文字讀（UTF-8 或 Big5），不然中文會變亂碼 */
+async function openWorkbook(file) {
   await loadXlsxLib();
-  const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  if (/\.csv$/i.test(file.name || '')) return window.XLSX.read(decodeText(await file.arrayBuffer()), { type: 'string' });
+  return window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+}
+
+export async function readXlsxRows(file) {
+  const wb = await openWorkbook(file);
   const ws = wb.Sheets[wb.SheetNames[0]];
   return window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
     .map(r => r.map(c => String(c ?? '').trim()))
@@ -80,8 +88,7 @@ export async function readXlsxRows(file) {
 
 /** 讀 Excel 的每一個工作表：{ 工作表名稱: [[…], …] } */
 export async function readXlsxBook(file) {
-  await loadXlsxLib();
-  const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const wb = await openWorkbook(file);
   return Object.fromEntries(wb.SheetNames.map(n => [n, window.XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '', raw: false })
     .map(r => r.map(c => String(c ?? '').trim())).filter(r => r.some(Boolean))]));
 }
@@ -250,7 +257,7 @@ export async function renderSurvey(root, ctx) {
     rosterFile.value = '';
     if (!f) return;
     try {
-      const rows = /\.xlsx?$/i.test(f.name) ? await readXlsxRows(f) : parseCSV(await f.text());
+      const rows = /\.xlsx?$/i.test(f.name) ? await readXlsxRows(f) : parseCSV(decodeText(await f.arrayBuffer()));
       S.roster = rows.map(r => r.join('\t')).join('\n');
       roster.value = S.roster;
       drawRosterInfo(); draw();
@@ -281,7 +288,7 @@ export async function renderSurvey(root, ctx) {
   fileInput.addEventListener('change', async () => {
     for (const f of fileInput.files) {
       let rows;
-      try { rows = /\.xlsx?$/i.test(f.name) ? await readXlsxRows(f) : parseCSV(await f.text()); }
+      try { rows = /\.xlsx?$/i.test(f.name) ? await readXlsxRows(f) : parseCSV(decodeText(await f.arrayBuffer())); }
       catch (e) { ctx.toast(e.message); continue; }
       if (rows.length < 1) { ctx.toast(`「${f.name}」是空的`); continue; }
       const headers = rows[0].map(h => h.trim());

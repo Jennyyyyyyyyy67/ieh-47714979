@@ -348,3 +348,51 @@ export function transcribePrompt() {
 - 不用標時間，也不用標是誰在說話。
 - 沒有人說話或只有雜音，就回傳空字串。`;
 }
+
+// ---------- 6. 從舊檔案找出踏查地點（PDF、Word、Excel、照片…） ----------
+export const PLACES_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    places: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING', description: '地點名稱，照文件寫的' },
+          dates: { type: 'ARRAY', items: { type: 'STRING' }, description: '去這個地點的日期，西元 YYYY-MM-DD；文件沒寫或推算不出來就空陣列' },
+          type: { type: 'STRING', enum: ['indoor', 'outdoor', 'mixed', 'unknown'] },
+          typeFromDoc: { type: 'BOOLEAN', description: '室內／室外是不是文件上寫的（true）還是你推測的（false）' },
+          transport: { type: 'STRING', enum: ['捷運', '專車', 'unknown'] },
+          season: { type: 'STRING', enum: ['summer', 'winter', 'unknown'] },
+          theme: { type: 'STRING', description: '文件寫的領域／主題，沒寫就空字串' },
+          access: { type: 'STRING', description: '文件寫的交通方式說明，沒寫就空字串' },
+          desc: { type: 'STRING', description: '文件寫的特色、參訪內容，沒寫就空字串' },
+          source: { type: 'STRING', description: '出自哪一個檔案（照【檔案】後面的名字）' },
+          quote: { type: 'STRING', description: '文件裡出現這個地點的那一小段原文（30 字以內），人名改成○○' },
+        },
+        required: ['name', 'dates', 'type', 'typeFromDoc', 'source', 'quote'],
+      },
+    },
+    skipped: { type: 'ARRAY', items: { type: 'STRING' }, description: '看到但不算踏查地點的（校內活動、停課、放假…）' },
+  },
+  required: ['places'],
+};
+
+export function placesExtractPrompt({ docs = [], binarySource = '' } = {}) {
+  const head = `你是幫國小老師整理「戶外踏查地點」的小幫手。下面是學校以前的踏查行程表、地點資料${binarySource ? '（附件是掃描檔或照片）' : '（PDF、Word、Excel 轉出來的文字，排版可能很亂，表格的一列會用「 | 」隔開）'}。
+請找出每一個「戶外踏查去參訪的地點」，和去的日期。
+
+【規則】
+1. 只能用文件裡寫的內容，不可以自己編地點、日期或介紹。文件沒寫的欄位就留空字串（或 unknown）。
+2. 不要抄任何人名、電話、班級、座號、名單（例如禁足名單、學生名字、聯絡人）。quote 裡如果有人名，改成「○○」。文件裡已經被遮掉的「○○」「（電話）」不用管它。
+3. 校內活動（講座、演練、校內課程）、停課、放假、只寫「待定」的，不算地點，寫進 skipped。
+4. 日期一律寫成西元 YYYY-MM-DD。民國年＋1911＝西元年（例如 110/9/28 → 2021-09-28）。
+   只寫「11/17」沒寫年的，用文件標題的學年度推算：X 學年度＝民國 X 年 8 月到民國 X+1 年 7 月（8～12 月是民國 X 年，1～7 月是民國 X+1 年）。推算不出來就不要寫這個日期。
+5. 同一個地點在文件裡出現很多次，只寫一筆，dates 放所有日期。名字寫法稍微不同但明顯是同一個地方（例如「總圖」和「高雄市立圖書館總館」），用文件裡比較完整的名字，寫一筆就好。
+6. 同一天有兩個地點（例如 A 團、B 團分開去），兩個地點都要寫，日期一樣。
+7. type：文件有寫室內／室外，就照寫，typeFromDoc=true；文件沒寫但很明顯（博物館、圖書館＝indoor；公園、步道＝outdoor；園區、植物園＝mixed），可以填，typeFromDoc=false；不確定就 unknown。
+8. transport：文件有寫捷運、輕軌就填「捷運」；有寫專車、遊覽車就填「專車」；沒寫就 unknown。season：文件寫夏季／第一、四學季填 summer，秋冬／第二、三學季填 winter，沒寫 unknown。
+9. source 寫這個地點出自哪一個檔案（照【檔案】後面的名字抄）。quote 抄原文裡這個地點出現的那一小段，讓老師可以對照。`;
+  if (binarySource) return `${head}\n\n【檔案】${binarySource}\n（內容在附件）`;
+  return `${head}\n\n${docs.map(d => `【檔案】${d.label || d.source}\n${d.text}`).join('\n\n')}`;
+}
