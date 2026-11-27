@@ -158,6 +158,17 @@ await step('註冊老師 A 並登入', async () => {
   assert.ok(await page.isVisible('text=本機試用模式'));
 });
 
+await step('評語小幫手：上方選單和選工作的畫面都有連結，開新分頁', async () => {
+  const a = page.locator('.tabs a.ext:has-text("評語小幫手")');
+  assert.ok(await a.isVisible());
+  assert.match(await a.getAttribute('href'), /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/);
+  assert.equal(await a.getAttribute('target'), '_blank');
+  await page.click('button:has-text("切換工作")');
+  await page.waitForSelector('text=今天要做什麼工作？');
+  assert.ok(await page.isVisible('a.role-card:has-text("評語小幫手")'));
+  await pickRole(page, '踏查、週會、發送');
+});
+
 await step('密碼太短會被擋下', async () => {
   const p2 = await context.newPage();
   await p2.goto(BASE);

@@ -26,6 +26,10 @@ const TABS = [
   { key: 'history', label: '🗂️ 紀錄', render: renderHistory, roles: ['main'] },
   { key: 'settings', label: '⚙️ 設定', render: renderSettings, roles: ['main'] },
 ];
+// 老師自己做的其他小幫手（另一個網站，開新分頁）
+const OTHER_APPS = [
+  { label: '📝 評語小幫手', url: 'https://script.google.com/macros/s/AKfycbzumQFUrzVliQqy1rmDRD-yfc35_kzcpJiH66M5VudErRHRPz-uDW4at7mMUEayI6-Q/exec', desc: '寫學生評語用。會開新分頁，用原本的方式登入。' },
+];
 const myRole = () => ctx.role || 'main';
 const ROLE_KEY = 'tripapp:task';
 const myTabs = () => TABS.filter(t => t.roles.includes(myRole()));
@@ -66,7 +70,8 @@ function renderTabs() {
   tabsEl.replaceChildren(...myTabs().map(t => el('button', {
     class: t.key === ctx.current ? 'active' : '',
     onclick: () => ctx.go(t.key),
-  }, myRole() !== 'main' && t.helperLabel ? t.helperLabel : t.label)));
+  }, myRole() !== 'main' && t.helperLabel ? t.helperLabel : t.label)),
+  ...OTHER_APPS.map(a => el('a', { class: 'ext', href: a.url, target: '_blank', rel: 'noopener', title: '開新分頁' }, `${a.label} ↗`)));
 }
 
 function renderAuth() {
@@ -129,6 +134,9 @@ function renderTaskPicker() {
         ctx.go(key === 'main' ? (ctx.settings.geminiKey ? 'trip' : 'settings') : 'survey');
       },
     }, el('strong', {}, r.label), el('span', { class: 'muted' }, r.desc))),
+    el('p', { class: 'muted', style: 'margin-top:16px' }, '其他小幫手：'),
+    ...OTHER_APPS.map(a => el('a', { class: 'role-card', href: a.url, target: '_blank', rel: 'noopener' },
+      el('strong', {}, `${a.label} ↗`), el('span', { class: 'muted' }, a.desc))),
   ));
 }
 
